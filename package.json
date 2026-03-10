@@ -1,0 +1,74 @@
+{
+  "name": "cscout-vscode",
+  "displayName": "CScout",
+  "description": "VS Code interface for the CScout C source code analyzer",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages", "Linters"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cscout.connect",
+        "title": "CScout: Connect to Server"
+      },
+      {
+        "command": "cscout.disconnect",
+        "title": "CScout: Disconnect"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cscout",
+          "title": "CScout",
+          "icon": "$(search)"
+        }
+      ]
+    },
+    "views": {
+      "cscout": [
+        {
+          "id": "cscout.identifiers",
+          "name": "Identifiers"
+        },
+        {
+          "id": "cscout.files",
+          "name": "Files"
+        },
+        {
+          "id": "cscout.functions",
+          "name": "Functions"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CScout",
+      "properties": {
+        "cscout.host": {
+          "type": "string",
+          "default": "localhost",
+          "description": "CScout server hostname"
+        },
+        "cscout.port": {
+          "type": "number",
+          "default": 8081,
+          "description": "CScout server port"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.0.0"
+  }
+}
