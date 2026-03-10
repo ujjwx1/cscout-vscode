@@ -1,6 +1,12 @@
 import * as vscode from 'vscode';
 import { CScoutClient, CScoutIdentifier, CScoutFile, CScoutFunction } from './cscoutClient';
 
+function fixPath(p: string): string {
+    const m = /^\/mnt\/([a-zA-Z])\/(.*)$/.exec(p);
+    if (m) { return `${m[1].toUpperCase()}:/${m[2]}`; }
+    return p;
+}
+
 let client: CScoutClient | undefined;
 
 // ---- Tree Data Providers ----
@@ -52,7 +58,7 @@ class FileItem extends vscode.TreeItem {
         this.command = {
             command: 'vscode.open',
             title: 'Open File',
-            arguments: [vscode.Uri.file(file.name)]
+            arguments: [vscode.Uri.file(fixPath(file.name))]
         };
     }
 }
@@ -164,7 +170,7 @@ class CScoutDefinitionProvider implements vscode.DefinitionProvider {
             const detail = await client.getIdentifierDetail(match.eid);
             return detail.locations.map(loc =>
                 new vscode.Location(
-                    vscode.Uri.file(loc.file),
+                    vscode.Uri.file(fixPath(loc.file)),
                     new vscode.Position(Math.max(0, loc.line - 1), 0)
                 )
             );
@@ -263,7 +269,7 @@ export function activate(context: vscode.ExtensionContext) {
                 const detail = await client.getIdentifierDetail(identifier.eid);
                 if (detail.locations.length > 0) {
                     const loc = detail.locations[0];
-                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(loc.file));
+                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fixPath(loc.file)));
                     const editor = await vscode.window.showTextDocument(doc);
                     const pos = new vscode.Position(Math.max(0, loc.line - 1), 0);
                     editor.selection = new vscode.Selection(pos, pos);
