@@ -190,6 +190,26 @@ export function activate(context: vscode.ExtensionContext) {
     const fileTree = new FileTreeProvider();
     const funcTree = new FunctionTreeProvider();
     const defProvider = new CScoutDefinitionProvider();
+    const hoverProvider: vscode.HoverProvider = {
+        async provideHover(document, position) {
+            if (!client) { return undefined; }
+            const range = document.getWordRangeAtPosition(position);
+            if (!range) { return undefined; }
+            const word = document.getText(range);
+            const identifiers = await client.getIdentifiers();
+            const match = identifiers.find(id => id.name === word);
+            if (!match) { return undefined; }
+            const lines = [
+                `**${match.name}**`,
+                `Kind: ${match.fun ? 'function' : match.macro ? 'macro' : match.typedef ? 'typedef' : match.suetag ? 'tag' : match.sumember ? 'member' : 'variable'}`,
+                `Scope: ${match.lscope ? 'project' : match.cscope ? 'file' : 'local'}`,
+                `Unused: ${match.unused ? 'yes ⚠️' : 'no'}`,
+                `Read-only: ${match.readonly ? 'yes' : 'no'}`,
+                `Crosses files: ${match.xfile ? 'yes' : 'no'}`,
+            ];
+            return new vscode.Hover(new vscode.MarkdownString(lines.join('  \n')));
+        }
+    };
 
     vscode.window.registerTreeDataProvider('cscout.identifiers', idTree);
     vscode.window.registerTreeDataProvider('cscout.files', fileTree);
@@ -199,6 +219,10 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.languages.registerDefinitionProvider(
             { scheme: 'file', language: 'c' },
             defProvider
+        ),
+        vscode.languages.registerHoverProvider(
+            { scheme: 'file', language: 'c' },
+            hoverProvider
         )
     );
 
