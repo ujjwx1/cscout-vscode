@@ -275,6 +275,53 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('cscout.renamePreview', async () => {
+            if (!client) {
+                vscode.window.showWarningMessage('Not connected to CScout server.');
+                return;
+            }
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) { return; }
+            const range = editor.document.getWordRangeAtPosition(editor.selection.active);
+            if (!range) { return; }
+            const word = editor.document.getText(range);
+
+            const identifiers = await client.getIdentifiers();
+            const match = identifiers.find(id => id.name === word);
+            if (!match) {
+                vscode.window.showInformationMessage(`'${word}' not found in CScout analysis.`);
+                return;
+            }
+
+            const newName = await vscode.window.showInputBox({
+                prompt: `Rename '${word}' to:`,
+                value: word
+            });
+            if (!newName || newName === word) { return; }
+
+            try {
+                const preview = await client.previewRename(match.eid, newName);
+                const output = vscode.window.createOutputChannel('CScout Refactoring');
+                output.clear();
+                output.appendLine(`Rename: ${preview.old_name} → ${preview.new_name}`);
+                output.appendLine(`Affected files: ${preview.affected_files}`);
+                output.appendLine(`Total replacements: ${preview.total_replacements}`);
+                output.appendLine('');
+                for (const change of preview.changes) {
+                    output.appendLine(`File: ${change.file}`);
+                    for (const r of change.replacements) {
+                        output.appendLine(`  Line ${r.line}: ${r.old} → ${r.new}`);
+                    }
+                    output.appendLine('');
+                }
+                output.show();
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Refactoring preview failed: ${err.message}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('cscout.disconnect', () => {
             client = undefined;
             idTree.clear();

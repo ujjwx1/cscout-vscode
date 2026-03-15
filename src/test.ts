@@ -250,6 +250,105 @@ async function runTests() {
         assert(funs.length === 382, `Expected 382 functions, got ${funs.length}`);
     });
 
+    // --- Function Metrics Tests ---
+    await test('GET /api/funmetrics returns metrics', async () => {
+        const funs = await client.getFunctions();
+        const checkdup = funs.find(f => f.name === 'checkdup');
+        assert(checkdup !== undefined, 'checkdup not found');
+        const resp = await client.getFileMetrics(0); // We need raw get
+        // Use direct fetch for funmetrics
+        const net = require('net');
+        const raw = await new Promise<string>((resolve, reject) => {
+            const socket = net.createConnection({ host: 'localhost', port: 8081 });
+            let data = '';
+            socket.setEncoding('utf-8');
+            socket.on('connect', () => socket.write(`GET /api/funmetrics?id=${checkdup!.id} HTTP/1.0\r\nHost: localhost:8081\r\nConnection: close\r\n\r\n`));
+            socket.on('data', (chunk: string) => data += chunk);
+            socket.on('end', () => { let b = data.indexOf('\r\n\r\n'); resolve(data.substring(b !== -1 ? b + 4 : data.indexOf('\n\n') + 2)); });
+            socket.on('error', reject);
+        });
+        const metrics = JSON.parse(raw);
+        assert(typeof metrics.name === 'string', 'name not string');
+        assert(typeof metrics.metrics === 'object', 'metrics not object');
+        assert(metrics.metrics.NLINE > 0, 'NLINE should be positive');
+    });
+
+    // --- Refactoring Preview Tests ---
+    await test('GET /api/refactor returns preview', async () => {
+        const ids = await client.getIdentifiers();
+        const checkdup = ids.find(i => i.name === 'checkdup');
+        assert(checkdup !== undefined, 'checkdup not found');
+        const net = require('net');
+        const raw = await new Promise<string>((resolve, reject) => {
+            const socket = net.createConnection({ host: 'localhost', port: 8081 });
+            let data = '';
+            socket.setEncoding('utf-8');
+            socket.on('connect', () => socket.write(`GET /api/refactor?id=${checkdup!.eid}&newname=check_dup HTTP/1.0\r\nHost: localhost:8081\r\nConnection: close\r\n\r\n`));
+            socket.on('data', (chunk: string) => data += chunk);
+            socket.on('end', () => { let b = data.indexOf('\r\n\r\n'); resolve(data.substring(b !== -1 ? b + 4 : data.indexOf('\n\n') + 2)); });
+            socket.on('error', reject);
+        });
+        const preview = JSON.parse(raw);
+        assert(preview.old_name === 'checkdup', 'wrong old name');
+        assert(preview.new_name === 'check_dup', 'wrong new name');
+        assert(preview.affected_files > 0, 'no affected files');
+        assert(preview.total_replacements > 0, 'no replacements');
+        assert(Array.isArray(preview.changes), 'changes not array');
+    });
+
+    await test('refactoring preview does not modify files', async () => {
+        const ids = await client.getIdentifiers();
+        const checkdup = ids.find(i => i.name === 'checkdup');
+        assert(checkdup !== undefined, 'checkdup not found');
+        // Call refactor preview
+        const net = require('net');
+        await new Promise<string>((resolve, reject) => {
+            const socket = net.createConnection({ host: 'localhost', port: 8081 });
+            let data = '';
+            socket.setEncoding('utf-8');
+            socket.on('connect', () => socket.write(`GET /api/refactor?id=${checkdup!.eid}&newname=renamed_func HTTP/1.0\r\nHost: localhost:8081\r\nConnection: close\r\n\r\n`));
+            socket.on('data', (chunk: string) => data += chunk);
+            socket.on('end', () => { let b = data.indexOf('\r\n\r\n'); resolve(data.substring(b !== -1 ? b + 4 : data.indexOf('\n\n') + 2)); });
+            socket.on('error', reject);
+        });
+        // Verify identifier still has original name
+        const after = await client.getIdentifiers();
+        const stillExists = after.find(i => i.name === 'checkdup');
+        assert(stillExists !== undefined, 'checkdup disappeared after preview - files were modified!');
+    });
+
+    await test('refactoring preview with invalid EID returns error', async () => {
+        const net = require('net');
+        const raw = await new Promise<string>((resolve, reject) => {
+            const socket = net.createConnection({ host: 'localhost', port: 8081 });
+            let data = '';
+            socket.setEncoding('utf-8');
+            socket.on('connect', () => socket.write(`GET /api/refactor?id=0xinvalid&newname=foo HTTP/1.0\r\nHost: localhost:8081\r\nConnection: close\r\n\r\n`));
+            socket.on('data', (chunk: string) => data += chunk);
+            socket.on('end', () => { let b = data.indexOf('\r\n\r\n'); resolve(data.substring(b !== -1 ? b + 4 : data.indexOf('\n\n') + 2)); });
+            socket.on('error', reject);
+        });
+        const result = JSON.parse(raw);
+        assert('error' in result, 'Expected error field');
+    });
+
+    await test('refactoring preview without newname returns error', async () => {
+        const ids = await client.getIdentifiers();
+        const id = ids[0];
+        const net = require('net');
+        const raw = await new Promise<string>((resolve, reject) => {
+            const socket = net.createConnection({ host: 'localhost', port: 8081 });
+            let data = '';
+            socket.setEncoding('utf-8');
+            socket.on('connect', () => socket.write(`GET /api/refactor?id=${id.eid} HTTP/1.0\r\nHost: localhost:8081\r\nConnection: close\r\n\r\n`));
+            socket.on('data', (chunk: string) => data += chunk);
+            socket.on('end', () => { let b = data.indexOf('\r\n\r\n'); resolve(data.substring(b !== -1 ? b + 4 : data.indexOf('\n\n') + 2)); });
+            socket.on('error', reject);
+        });
+        const result = JSON.parse(raw);
+        assert('error' in result, 'Expected error field');
+    });
+
     // --- Error Handling Tests ---
     await test('invalid identifier EID returns error', async () => {
         try {

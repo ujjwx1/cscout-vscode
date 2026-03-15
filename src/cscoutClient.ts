@@ -104,6 +104,11 @@ export class CScoutClient {
         return JSON.parse(resp);
     }
 
+    async previewRename(eid: string, newName: string): Promise<any> {
+        const resp = await this.get(`/api/refactor?id=${eid}&newname=${encodeURIComponent(newName)}`);
+        return JSON.parse(resp);
+    }
+
     private get(path: string): Promise<string> {
         return new Promise((resolve, reject) => {
             const net = require('net');

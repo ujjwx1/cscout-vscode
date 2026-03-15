@@ -18,6 +18,10 @@
       {
         "command": "cscout.disconnect",
         "title": "CScout: Disconnect"
+      },
+      {
+        "command": "cscout.renamePreview",
+        "title": "CScout: Preview Rename"
       }
     ],
     "viewsContainers": {
