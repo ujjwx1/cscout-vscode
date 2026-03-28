@@ -2,9 +2,9 @@
 
 A VS Code extension that connects to CScout's REST/JSON API to provide IDE integration for C source code analysis.
 
-<img width="1495" height="1518" alt="Image" src="https://github.com/user-attachments/assets/e9cad6a8-7cc7-44bf-ad9d-0faa85017ccc" />
+<img width="495" height="518" alt="Image" src="https://github.com/user-attachments/assets/e9cad6a8-7cc7-44bf-ad9d-0faa85017ccc" />
 
-<img width="1496" height="1528" alt="Image" src="https://github.com/user-attachments/assets/6004595f-babf-403b-8060-324a454a38b1" />
+<img width="496" height="528" alt="Image" src="https://github.com/user-attachments/assets/6004595f-babf-403b-8060-324a454a38b1" />
 
 ## What This Is
 
