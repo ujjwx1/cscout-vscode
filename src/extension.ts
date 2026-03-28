@@ -8,6 +8,7 @@ function fixPath(p: string): string {
 }
 
 let client: CScoutClient | undefined;
+let statusBar: vscode.StatusBarItem;
 
 // ---- Tree Data Providers ----
 // These provide data for the three sidebar panels (Identifiers, Files, Functions)
@@ -183,6 +184,12 @@ class CScoutDefinitionProvider implements vscode.DefinitionProvider {
 // ---- Extension Activation ----
 
 export function activate(context: vscode.ExtensionContext) {
+    statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    statusBar.text = '$(circle-slash) CScout';
+    statusBar.tooltip = 'CScout: Not connected';
+    statusBar.command = 'cscout.connect';
+    statusBar.show();
+    context.subscriptions.push(statusBar);
     const output = vscode.window.createOutputChannel('CScout');
     output.appendLine('CScout extension activated.');
 
@@ -223,6 +230,59 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.languages.registerHoverProvider(
             { scheme: 'file', language: 'c' },
             hoverProvider
+        ),
+        vscode.languages.registerReferenceProvider(
+            { scheme: 'file', language: 'c' },
+            {
+                async provideReferences(document, position): Promise<vscode.Location[]> {
+                    if (!client) { return []; }
+                    const range = document.getWordRangeAtPosition(position);
+                    if (!range) { return []; }
+                    const word = document.getText(range);
+                    const identifiers = await client.getIdentifiers();
+                    const match = identifiers.find(id => id.name === word);
+                    if (!match) { return []; }
+                    try {
+                        const detail = await client.getIdentifierDetail(match.eid);
+                        return detail.locations.map(loc =>
+                            new vscode.Location(
+                                vscode.Uri.file(fixPath(loc.file)),
+                                new vscode.Position(Math.max(0, loc.line - 1), 0)
+                            )
+                        );
+                    } catch { return []; }
+                }
+            }
+        )
+    );
+
+    context.subscriptions.push(
+        vscode.languages.registerCodeLensProvider(
+            { scheme: 'file', language: 'c' },
+            {
+                async provideCodeLenses(document): Promise<vscode.CodeLens[]> {
+                    if (!client) { return []; }
+                    const lenses: vscode.CodeLens[] = [];
+                    const functions = await client.getFunctions();
+                    const text = document.getText();
+                    for (const func of functions) {
+                        if (!func.is_defined) { continue; }
+                        const regex = new RegExp(`\\b${func.name.replace(/[.*+?^${}()|[\]\\]/g, '\\\\$&')}\\s*\\(`, 'g');
+                        let match;
+                        while ((match = regex.exec(text)) !== null) {
+                            const pos = document.positionAt(match.index);
+                            const range = new vscode.Range(pos, pos);
+                            lenses.push(new vscode.CodeLens(range, {
+                                title: `$(arrow-down) ${func.fanin} callers  $(arrow-up) ${func.fanout} calls`,
+                                command: '',
+                                arguments: []
+                            }));
+                            break;
+                        }
+                    }
+                    return lenses;
+                }
+            }
         )
     );
 
@@ -266,6 +326,9 @@ export function activate(context: vscode.ExtensionContext) {
                     output.appendLine(
                         `Connected: ${identifiers.length} identifiers, ${files.length} files, ${functions.length} functions`
                     );
+                    statusBar.text = '$(check) CScout';
+                    statusBar.tooltip = `Connected: ${identifiers.length} identifiers, ${files.length} files, ${functions.length} functions`;
+                    statusBar.command = 'cscout.disconnect';
                     vscode.window.showInformationMessage(
                         `CScout: ${identifiers.length} identifiers, ${files.length} files, ${functions.length} functions`
                     );
@@ -328,6 +391,9 @@ export function activate(context: vscode.ExtensionContext) {
             fileTree.clear();
             funcTree.clear();
             diagnosticCollection.clear();
+            statusBar.text = '$(circle-slash) CScout';
+            statusBar.tooltip = 'CScout: Not connected';
+            statusBar.command = 'cscout.connect';
             vscode.window.showInformationMessage('CScout: Disconnected.');
             output.appendLine('Disconnected.');
         })
@@ -349,6 +415,144 @@ export function activate(context: vscode.ExtensionContext) {
             } catch (err: any) {
                 vscode.window.showErrorMessage(`Failed to navigate: ${err.message}`);
             }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('cscout.showFunctionMetrics', async () => {
+            if (!client) {
+                vscode.window.showWarningMessage('Not connected to CScout server.');
+                return;
+            }
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) { return; }
+            const range = editor.document.getWordRangeAtPosition(editor.selection.active);
+            if (!range) { return; }
+            const word = editor.document.getText(range);
+
+            const functions = await client.getFunctions();
+            const match = functions.find(f => f.name === word);
+            if (!match) {
+                vscode.window.showInformationMessage(`'${word}' is not a known function.`);
+                return;
+            }
+
+            try {
+                const metrics = await client.getFunctionMetrics(match.id);
+                const panel = vscode.window.createWebviewPanel(
+                    'cscoutMetrics',
+                    `Metrics: ${match.name}`,
+                    vscode.ViewColumn.Beside,
+                    {}
+                );
+                const rows = Object.entries(metrics.metrics)
+                    .map(([k, v]) => `<tr><td style="padding:4px 12px;border-bottom:1px solid #333">${k}</td><td style="padding:4px 12px;border-bottom:1px solid #333;text-align:right">${v}</td></tr>`)
+                    .join('');
+                panel.webview.html = `<!DOCTYPE html>
+<html><head><style>
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 16px; color: #ccc; background: #1e1e1e; }
+h2 { color: #569cd6; margin-bottom: 4px; }
+h3 { color: #888; font-weight: normal; margin-top: 0; }
+table { border-collapse: collapse; width: 100%; }
+th { text-align: left; padding: 8px 12px; border-bottom: 2px solid #569cd6; color: #569cd6; }
+</style></head><body>
+<h2>${metrics.name}</h2>
+<h3>Fan-in: ${match.fanin} | Fan-out: ${match.fanout} | ${match.is_macro ? 'Macro' : 'Function'}</h3>
+<table><tr><th>Metric</th><th style="text-align:right">Value</th></tr>${rows}</table>
+</body></html>`;
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Failed to load metrics: ${err.message}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('cscout.showCallGraph', async () => {
+            if (!client) {
+                vscode.window.showWarningMessage('Not connected to CScout server.');
+                return;
+            }
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) { return; }
+            const range = editor.document.getWordRangeAtPosition(editor.selection.active);
+            if (!range) { return; }
+            const word = editor.document.getText(range);
+
+            const functions = await client.getFunctions();
+            const match = functions.find(f => f.name === word);
+            if (!match) {
+                vscode.window.showInformationMessage(`'${word}' is not a known function.`);
+                return;
+            }
+
+            try {
+                const callers = await client.getCallers(match.id);
+                const callees = await client.getCallees(match.id);
+                const panel = vscode.window.createWebviewPanel(
+                    'cscoutCallGraph',
+                    `Call Graph: ${match.name}`,
+                    vscode.ViewColumn.Beside,
+                    {}
+                );
+                const callerRows = callers.map((c: any) => `<li>${c.name}</li>`).join('');
+                const calleeRows = callees.map((c: any) => `<li>${c.name}</li>`).join('');
+                panel.webview.html = `<!DOCTYPE html>
+<html><head><style>
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 16px; color: #ccc; background: #1e1e1e; }
+h2 { color: #569cd6; }
+h3 { color: #4ec9b0; }
+.columns { display: flex; gap: 40px; }
+.col { flex: 1; }
+li { padding: 4px 0; }
+.count { color: #888; font-size: 0.9em; }
+</style></head><body>
+<h2>${match.name}</h2>
+<div class="columns">
+<div class="col">
+<h3>Callers <span class="count">(${callers.length})</span></h3>
+<ul>${callerRows || '<li style="color:#888">No callers</li>'}</ul>
+</div>
+<div class="col">
+<h3>Calls <span class="count">(${callees.length})</span></h3>
+<ul>${calleeRows || '<li style="color:#888">No callees</li>'}</ul>
+</div>
+</div>
+</body></html>`;
+            } catch (err: any) {
+                vscode.window.showErrorMessage(`Failed to load call graph: ${err.message}`);
+            }
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('cscout.refresh', async () => {
+            if (!client) {
+                vscode.window.showWarningMessage('Not connected to CScout server.');
+                return;
+            }
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'CScout: Refreshing...' },
+                async (progress) => {
+                    progress.report({ message: 'Fetching identifiers...' });
+                    const identifiers = await client!.getIdentifiers();
+                    idTree.load(identifiers);
+                    defProvider.updateCache(identifiers);
+
+                    progress.report({ message: 'Fetching files...' });
+                    const files = await client!.getFiles();
+                    fileTree.load(files);
+
+                    progress.report({ message: 'Fetching functions...' });
+                    const functions = await client!.getFunctions();
+                    funcTree.load(functions);
+
+                    progress.report({ message: 'Computing diagnostics...' });
+                    await refreshDiagnostics();
+
+                    statusBar.tooltip = `Connected: ${identifiers.length} identifiers, ${files.length} files, ${functions.length} functions`;
+                    vscode.window.showInformationMessage('CScout: Data refreshed.');
+                }
+            );
         })
     );
 

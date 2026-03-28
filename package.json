@@ -1,6 +1,7 @@
 {
   "name": "cscout-vscode",
   "displayName": "CScout",
+  "icon": "logo.png",
   "description": "VS Code interface for the CScout C source code analyzer",
   "version": "0.1.0",
   "engines": {
@@ -23,13 +24,28 @@
         "command": "cscout.renamePreview",
         "title": "CScout: Preview Rename"
       }
+      ,
+      {
+        "command": "cscout.showFunctionMetrics",
+        "title": "CScout: Show Function Metrics"
+      }
+      ,
+      {
+        "command": "cscout.showCallGraph",
+        "title": "CScout: Show Call Graph"
+      }
+      ,
+      {
+        "command": "cscout.refresh",
+        "title": "CScout: Refresh"
+      }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "cscout",
           "title": "CScout",
-          "icon": "$(search)"
+          "icon": "icon.svg"
         }
       ]
     },

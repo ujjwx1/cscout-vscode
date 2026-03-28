@@ -66,47 +66,62 @@ export class CScoutClient {
 
     async getIdentifiers(): Promise<CScoutIdentifier[]> {
         const resp = await this.get('/api/identifiers');
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/identifiers'); }
     }
 
     async getIdentifierDetail(eid: string): Promise<CScoutIdDetail> {
         const resp = await this.get(`/api/id?id=${eid}`);
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/id'); }
     }
 
     async getFiles(): Promise<CScoutFile[]> {
         const resp = await this.get('/api/files');
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/files'); }
     }
 
     async getFileMetrics(fid: number): Promise<any> {
         const resp = await this.get(`/api/filemetrics?id=${fid}`);
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/filemetrics'); }
     }
 
     async getFunctions(): Promise<CScoutFunction[]> {
         const resp = await this.get('/api/functions');
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/functions'); }
     }
 
     async getCallers(funcId: string): Promise<any[]> {
         const resp = await this.get(`/api/funcs?callers=${funcId}`);
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/funcs?callers'); }
     }
 
     async getCallees(funcId: string): Promise<any[]> {
         const resp = await this.get(`/api/funcs?callees=${funcId}`);
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/funcs?callees'); }
     }
 
     async getProjects(): Promise<any[]> {
         const resp = await this.get('/api/projects');
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/projects'); }
     }
 
     async previewRename(eid: string, newName: string): Promise<any> {
         const resp = await this.get(`/api/refactor?id=${eid}&newname=${encodeURIComponent(newName)}`);
-        return JSON.parse(resp);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/refactor'); }
+    }
+    
+    async getFunctionMetrics(funcId: string): Promise<any> {
+        const resp = await this.get(`/api/funmetrics?id=${funcId}`);
+        try { return JSON.parse(resp); }
+        catch { throw new Error('Invalid response from /api/funmetrics'); }
     }
 
     private get(path: string): Promise<string> {
