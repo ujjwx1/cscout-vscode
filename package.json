@@ -7,39 +7,78 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Programming Languages", "Linters"],
-  "activationEvents": [],
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:c",
+    "workspaceContains:**/*.c"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "cscout.connect",
-        "title": "CScout: Connect to Server"
+        "command": "cscout.start",
+        "title": "CScout: Start Analysis",
+        "icon": "$(play)"
       },
       {
-        "command": "cscout.disconnect",
-        "title": "CScout: Disconnect"
+        "command": "cscout.stop",
+        "title": "CScout: Stop",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "cscout.reanalyze",
+        "title": "CScout: Re-analyze",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "cscout.toggle",
+        "title": "CScout: Toggle Start/Stop"
+      },
+      {
+        "command": "cscout.refresh",
+        "title": "CScout: Refresh",
+        "icon": "$(refresh)"
       },
       {
         "command": "cscout.renamePreview",
         "title": "CScout: Preview Rename"
-      }
-      ,
+      },
       {
         "command": "cscout.showFunctionMetrics",
         "title": "CScout: Show Function Metrics"
-      }
-      ,
+      },
       {
         "command": "cscout.showCallGraph",
         "title": "CScout: Show Call Graph"
       }
-      ,
-      {
-        "command": "cscout.refresh",
-        "title": "CScout: Refresh"
-      }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "cscout.start",
+          "when": "view == cscout.identifiers && cscout.state != ready && cscout.state != analyzing && cscout.state != indexing",
+          "group": "navigation"
+        },
+        {
+          "command": "cscout.stop",
+          "when": "view == cscout.identifiers && cscout.state == ready",
+          "group": "navigation"
+        },
+        {
+          "command": "cscout.refresh",
+          "when": "view == cscout.identifiers && cscout.state == ready",
+          "group": "navigation"
+        },
+        {
+          "command": "cscout.reanalyze",
+          "when": "view == cscout.identifiers && cscout.state == ready",
+          "group": "navigation"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -58,10 +97,6 @@
         {
           "id": "cscout.files",
           "name": "Files"
-        },
-        {
-          "id": "cscout.functions",
-          "name": "Functions"
         }
       ]
     },
@@ -71,12 +106,50 @@
         "cscout.host": {
           "type": "string",
           "default": "localhost",
-          "description": "CScout server hostname"
+          "description": "CScout API server hostname"
         },
         "cscout.port": {
           "type": "number",
           "default": 8081,
-          "description": "CScout server port"
+          "description": "CScout API server port"
+        },
+        "cscout.binaryPath": {
+          "type": "string",
+          "default": "cscout",
+          "description": "Path to cscout binary (resolved via PATH on Linux/macOS; full path required on Windows)"
+        },
+        "cscout.cscocoPyPath": {
+          "type": "string",
+          "default": "cscoco.py",
+          "description": "Path to cscoco.py (compile_commands.json to .cs converter)"
+        },
+        "cscout.csapiPyPath": {
+          "type": "string",
+          "description": "Path to csapi.py (REST server). If not set, derived as sibling of cscocoPyPath."
+        },
+        "cscout.csmakePath": {
+          "type": "string",
+          "default": "csmake",
+          "description": "Path to csmake binary (Makefile interception tool)"
+        },
+        "cscout.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Path to Python 3 interpreter"
+        },
+        "cscout.sqlite3Path": {
+          "type": "string",
+          "default": "sqlite3",
+          "description": "Path to sqlite3 binary"
+        },
+        "cscout.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically start CScout analysis when a C workspace is opened"
+        },
+        "cscout.projectName": {
+          "type": "string",
+          "description": "Override the project name (defaults to the workspace folder name)"
         }
       }
     }

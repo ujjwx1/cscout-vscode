@@ -1,175 +1,256 @@
+/*
+ * cscoutClient.ts — HTTP client for the csapi REST server.
+ *
+ * csapi is a standard HTTP/1.1 server exposing the CScout SQLite
+ * database as JSON.  Field names come directly from SQL column names
+ * (uppercase) — we mirror them here to avoid ambiguity.
+ */
+
+import * as http from 'http';
+
+/*
+ * Field naming: csapi returns SQL column names verbatim (EID, NAME,
+ * FUN, UNUSED, etc.).  We do not translate — what you see in the API
+ * matches what the extension code accesses.
+ */
+
 export interface CScoutIdentifier {
-    eid: string;
-    name: string;
-    readonly: boolean;
-    macro: boolean;
-    ordinary: boolean;
-    suetag: boolean;
-    sumember: boolean;
-    label: boolean;
-    typedef: boolean;
-    fun: boolean;
-    cscope: boolean;
-    lscope: boolean;
-    unused: boolean;
-    xfile: boolean;
+	EID: number;
+	NAME: string;
+	READONLY: number;
+	UNDEFMACRO: number;
+	MACRO: number;
+	FUNMACRO: number;
+	MACROARG: number;
+	CPPCONST: number;
+	CPPSTRVAL: number;
+	DEFCCONSTVAL: number;
+	NOTDEFCCONSTVAL: number;
+	EXPCCONSTVAL: number;
+	NOTEXPCCONSTVAL: number;
+	ORDINARY: number;
+	SUETAG: number;
+	SUMEMBER: number;
+	LABEL: number;
+	TYPEDEF: number;
+	ENUM: number;
+	YACC: number;
+	FUN: number;
+	CSCOPE: number;
+	LSCOPE: number;
+	UNUSED: number;
 }
 
 export interface CScoutFile {
-    fid: number;
-    name: string;
-    readonly: boolean;
+	FID: number;
+	NAME: string;
+	RO: number;
 }
 
 export interface CScoutFunction {
-    id: string;
-    name: string;
-    is_macro: boolean;
-    is_defined: boolean;
-    is_file_scoped: boolean;
-    fanin: number;
-    fanout: number;
+	ID: number;
+	NAME: string;
+	ISMACRO: number;
+	DEFINED: number;
+	DECLARED: number;
+	FILESCOPED: number;
+	FID: number;
+	FOFFSET: number;
+	FANIN: number;
+	FANOUT: number | null;
+	CCYCL1: number | null;
 }
 
 export interface CScoutLocation {
-    fid: number;
-    file: string;
-    line: number;
-    offset: number;
+	FID: number;
+	FILE: string;
+	FOFFSET: number;
+	LNUM: number | null;
 }
 
 export interface CScoutIdDetail {
-    eid: string;
-    name: string;
-    unused: boolean;
-    xfile: boolean;
-    locations: CScoutLocation[];
+	identifier: CScoutIdentifier;
+	locations: CScoutLocation[];
+}
+
+export interface CScoutCallEntry {
+	ID: number;
+	NAME: string;
+	FID: number;
+	FOFFSET: number;
+	FILE: string;
+}
+
+export interface CScoutFileMetric {
+	FID: number;
+	PRECPP: number;
+	[key: string]: number | null;
+}
+
+export interface CScoutFuncMetric {
+	FUNCTIONID: number;
+	PRECPP: number;
+	[key: string]: number | null;
+}
+
+export interface CScoutRefactorPreview {
+	eid: number;
+	old_name: string;
+	new_name: string;
+	total_replacements: number;
+	locations: CScoutLocation[];
+}
+
+export interface CScoutStatus {
+	status: string;
+	indexes_ready: boolean;
+}
+
+export interface CScoutProject {
+	PID: number;
+	NAME: string;
+}
+
+export interface IdentifierFilters {
+	unused?: boolean;
+	macro?: boolean;
+	fun?: boolean;
+	readonly?: boolean;
+	should_be_static?: boolean;
+	name?: string;
+	limit?: number;
+	offset?: number;
+}
+
+export interface FunctionFilters {
+	defined?: boolean;
+	filescoped?: boolean;
+	limit?: number;
+	offset?: number;
 }
 
 export class CScoutClient {
-    private host: string;
-    private port: number;
 
-    constructor(host: string = 'localhost', port: number = 8081) {
-        this.host = host;
-        this.port = port;
-    }
+	constructor(private host: string, private port: number) { }
 
-    async isAlive(): Promise<boolean> {
-        try {
-            const html = await this.get('/index.html');
-            return html.includes('CScout');
-        } catch {
-            return false;
-        }
-    }
+	/*
+	 * Basic GET returning parsed JSON.  Rejects on network error,
+	 * non-2xx status, or unparseable body.
+	 */
+	private get<T>(path: string): Promise<T> {
+		return new Promise((resolve, reject) => {
+			const req = http.get(
+				{
+					host: this.host,
+					port: this.port,
+					path,
+					timeout: 30_000,
+				},
+				(res) => {
+					let body = '';
+					res.setEncoding('utf-8');
+					res.on('data', (chunk) => (body += chunk));
+					res.on('end', () => {
+						if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+							reject(new Error(`csapi ${path}: HTTP ${res.statusCode}`));
+							return;
+						}
+						try {
+							resolve(JSON.parse(body) as T);
+						} catch {
+							reject(new Error(`csapi ${path}: invalid JSON response`));
+						}
+					});
+				}
+			);
+			req.on('timeout', () => {
+				req.destroy();
+				reject(new Error(`csapi ${path}: timeout`));
+			});
+			req.on('error', reject);
+		});
+	}
 
-    async getIdentifiers(): Promise<CScoutIdentifier[]> {
-        const resp = await this.get('/api/identifiers');
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/identifiers'); }
-    }
+	private buildQuery(params: Record<string, unknown>): string {
+		const parts: string[] = [];
+		for (const [key, value] of Object.entries(params)) {
+			if (value === undefined || value === null) {
+				continue;
+			}
+			parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+		}
+		return parts.length ? `?${parts.join('&')}` : '';
+	}
 
-    async getIdentifierDetail(eid: string): Promise<CScoutIdDetail> {
-        const resp = await this.get(`/api/id?id=${eid}`);
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/id'); }
-    }
+	async getStatus(): Promise<CScoutStatus> {
+		return this.get<CScoutStatus>('/status');
+	}
 
-    async getFiles(): Promise<CScoutFile[]> {
-        const resp = await this.get('/api/files');
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/files'); }
-    }
+	async isAlive(): Promise<boolean> {
+		try {
+			const status = await this.getStatus();
+			return status.status === 'ok';
+		} catch {
+			return false;
+		}
+	}
 
-    async getFileMetrics(fid: number): Promise<any> {
-        const resp = await this.get(`/api/filemetrics?id=${fid}`);
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/filemetrics'); }
-    }
+	async getIdentifiers(filters: IdentifierFilters = {}): Promise<CScoutIdentifier[]> {
+		return this.get<CScoutIdentifier[]>('/identifiers' + this.buildQuery(filters as Record<string, unknown>));
+	}
 
-    async getFunctions(): Promise<CScoutFunction[]> {
-        const resp = await this.get('/api/functions');
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/functions'); }
-    }
+	async getIdentifier(eid: number): Promise<CScoutIdDetail> {
+		return this.get<CScoutIdDetail>(`/identifier?eid=${eid}`);
+	}
 
-    async getCallers(funcId: string): Promise<any[]> {
-        const resp = await this.get(`/api/funcs?callers=${funcId}`);
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/funcs?callers'); }
-    }
+	async getFiles(): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>('/files');
+	}
 
-    async getCallees(funcId: string): Promise<any[]> {
-        const resp = await this.get(`/api/funcs?callees=${funcId}`);
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/funcs?callees'); }
-    }
+	async getFilemetrics(fid: number): Promise<CScoutFileMetric[]> {
+		return this.get<CScoutFileMetric[]>(`/filemetrics?fid=${fid}`);
+	}
 
-    async getProjects(): Promise<any[]> {
-        const resp = await this.get('/api/projects');
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/projects'); }
-    }
+	async getFunctions(filters: FunctionFilters = {}): Promise<CScoutFunction[]> {
+		return this.get<CScoutFunction[]>('/functions' + this.buildQuery(filters as Record<string, unknown>));
+	}
 
-    async previewRename(eid: string, newName: string): Promise<any> {
-        const resp = await this.get(`/api/refactor?id=${eid}&newname=${encodeURIComponent(newName)}`);
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/refactor'); }
-    }
-    
-    async getFunctionMetrics(funcId: string): Promise<any> {
-        const resp = await this.get(`/api/funmetrics?id=${funcId}`);
-        try { return JSON.parse(resp); }
-        catch { throw new Error('Invalid response from /api/funmetrics'); }
-    }
+	async getFunmetrics(fnid: number): Promise<CScoutFuncMetric[]> {
+		return this.get<CScoutFuncMetric[]>(`/funmetrics?fnid=${fnid}`);
+	}
 
-    private get(path: string): Promise<string> {
-        return new Promise((resolve, reject) => {
-            const net = require('net');
-            const socket = net.createConnection({ host: this.host, port: this.port });
-            let raw = '';
-            let settled = false;
+	async getCallers(eid: number): Promise<CScoutCallEntry[]> {
+		return this.get<CScoutCallEntry[]>(`/callers?fnid=${eid}`);
+	}
 
-            const fail = (err: Error) => {
-                if (settled) { return; }
-                settled = true;
-                socket.destroy();
-                reject(err);
-            };
+	async getCallees(eid: number): Promise<CScoutCallEntry[]> {
+		return this.get<CScoutCallEntry[]>(`/callees?fnid=${eid}`);
+	}
 
-            socket.setTimeout(10000);
-            socket.setEncoding('utf-8');
+	async getProjects(): Promise<CScoutProject[]> {
+		return this.get<CScoutProject[]>('/projects');
+	}
 
-            socket.on('connect', () => {
-                socket.write(
-                    `GET ${path} HTTP/1.0\r\n` +
-                    `Host: ${this.host}:${this.port}\r\n` +
-                    `Connection: close\r\n` +
-                    `\r\n`
-                );
-            });
+	async previewRename(eid: number, newName: string): Promise<CScoutRefactorPreview> {
+		return this.get<CScoutRefactorPreview>(
+			`/refactor/preview?eid=${eid}&newname=${encodeURIComponent(newName)}`
+		);
+	}
 
-            socket.on('data', (chunk: string) => { raw += chunk; });
+	/*
+	 * Ask csapi to shut down gracefully.  Called before killing the
+	 * process so listeners can clean up.  Errors are ignored — the
+	 * server may already be gone.
+	 */
+	async quit(): Promise<void> {
+		try {
+			await this.get<unknown>('/quit');
+		} catch {
+			/* server is gone or was never running — expected */
+		}
+	}
 
-            socket.on('end', () => {
-                if (settled) { return; }
-                settled = true;
-
-                // Skip HTTP headers, find body after blank line
-                let bodyStart = raw.indexOf('\r\n\r\n');
-                if (bodyStart !== -1) {
-                    bodyStart += 4;
-                } else {
-                    bodyStart = raw.indexOf('\n\n');
-                    bodyStart = bodyStart !== -1 ? bodyStart + 2 : 0;
-                }
-
-                resolve(raw.substring(bodyStart));
-            });
-
-            socket.on('timeout', () => fail(new Error(`Timeout fetching ${path}`)));
-            socket.on('error', (err: Error) => fail(err));
-        });
-    }
+	getBaseUrl(): string {
+		return `http://${this.host}:${this.port}`;
+	}
 }
