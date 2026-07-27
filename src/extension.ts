@@ -901,6 +901,37 @@ export function activate(context: vscode.ExtensionContext): void {
                 void refreshDiagnostics(client, diagnostics);
             }
         }),
+        vscode.commands.registerCommand('cscout.showFileDep', async (graphType: string, writableOnly: boolean) => {
+            const client = lifecycle.getClient();
+            if (!client) return;
+            const panel = vscode.window.createWebviewPanel(
+                'cscoutFileDep',
+                `File dependency: ${graphType}${writableOnly ? ' (writable)' : ''}`,
+                vscode.ViewColumn.Beside,
+                { enableScripts: true }
+            );
+            try {
+                const http = await import('http');
+                const html = await new Promise<string>((resolve, reject) => {
+                    const baseUrl = new URL(client.getBaseUrl());
+                    const path = `/filegraph/${graphType}${writableOnly ? '?writable=true' : ''}`;
+                    http.get({
+                        host: baseUrl.hostname,
+                        port: parseInt(baseUrl.port),
+                        path,
+                        timeout: 30000,
+                    }, (res) => {
+                        let body = '';
+                        res.setEncoding('utf-8');
+                        res.on('data', (chunk) => body += chunk);
+                        res.on('end', () => resolve(body));
+                    }).on('error', reject).on('timeout', () => reject(new Error('timeout')));
+                });
+                panel.webview.html = makeGraphInteractive(html);
+            } catch (err) {
+                panel.webview.html = `<html><body>Error: ${escapeHtml(String(err))}</body></html>`;
+            }
+        }),
         vscode.commands.registerCommand('cscout.gotoIdentifier', async (eid: number) => {
             const client = lifecycle.getClient();
             if (!client) return;
@@ -930,12 +961,17 @@ export function activate(context: vscode.ExtensionContext): void {
                 vscode.window.showErrorMessage(`Could not open file: ${(err as Error).message}`);
             }
         }),
-        vscode.commands.registerCommand('cscout.showCallGraph', async (eid?: number) => {
+        vscode.commands.registerCommand('cscout.showCallGraph', async (eidOrFnid?: number, isFnid: boolean = false, nameHint?: string) => {
             const client = lifecycle.getClient();
             if (!client) return;
-            const target = eid ?? (await promptForFunctionEid(client));
+            const target = eidOrFnid ?? (await promptForFunctionEid(client));
             if (target === undefined) return;
-            await showCallGraph(context, client, target);
+            await showCallGraph(context, client, target, isFnid, nameHint);
+        }),
+        vscode.commands.registerCommand('cscout.showIncludeGraph', async (writableOnly: boolean = true) => {
+            const client = lifecycle.getClient();
+            if (!client) return;
+            await showIncludeGraph(context, client, writableOnly);
         }),
         vscode.commands.registerCommand('cscout.showFunctionMetrics', async (fnid?: number) => {
             const client = lifecycle.getClient();
@@ -1037,60 +1073,182 @@ async function promptForFunctionEid(client: CScoutClient): Promise<number | unde
     return pick?.value;
 }
 
+function makeGraphInteractive(html: string): string {
+    return html
+        .replace('svg { max-width: 100%; height: auto; }', `
+            svg {
+                transform-origin: 0 0;
+                cursor: grab;
+                user-select: none;
+                max-width: none !important;
+                height: auto !important;
+            }
+            svg:active {
+                cursor: grabbing;
+            }
+        `)
+        .replace('</style>', `
+            svg {
+                transform-origin: 0 0;
+                cursor: grab;
+                user-select: none;
+                max-width: none !important;
+                height: auto !important;
+            }
+            svg:active {
+                cursor: grabbing;
+            }
+            svg > polygon:first-child,
+            svg > rect:first-child { fill: transparent !important; }
+            body { background: var(--vscode-editor-background); }
+        </style>`)
+        .replace('</body>', `
+        <script>
+            let scale = 1, x = 0, y = 0, isDragging = false, startX, startY;
+            const svg = document.querySelector('svg');
+            if (svg) {
+                window.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                    const zoom = e.deltaY < 0 ? 1.15 : 0.85;
+                    const rect = svg.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+                    x -= mouseX * (zoom - 1);
+                    y -= mouseY * (zoom - 1);
+                    scale *= zoom;
+                    svg.style.transform = \`translate(\${x}px, \${y}px) scale(\${scale})\`;
+                }, { passive: false });
+
+                window.addEventListener('pointerdown', (e) => {
+                    if (e.button !== 0) return;
+                    isDragging = true;
+                    startX = e.clientX - x;
+                    startY = e.clientY - y;
+                    svg.setPointerCapture(e.pointerId);
+                });
+
+                window.addEventListener('pointermove', (e) => {
+                    if (!isDragging) return;
+                    x = e.clientX - startX;
+                    y = e.clientY - startY;
+                    svg.style.transform = \`translate(\${x}px, \${y}px) scale(\${scale})\`;
+                });
+
+                window.addEventListener('pointerup', (e) => {
+                    if (isDragging) {
+                        isDragging = false;
+                        svg.releasePointerCapture(e.pointerId);
+                    }
+                });
+
+                window.addEventListener('pointercancel', (e) => {
+                    if (isDragging) {
+                        isDragging = false;
+                        svg.releasePointerCapture(e.pointerId);
+                    }
+                });
+            }
+        </script>
+        </body>`);
+}
+
 async function showCallGraph(
     context: vscode.ExtensionContext,
     client: CScoutClient,
-    eid: number
+    eidOrFnid: number,
+    isFnid: boolean = false,
+    nameHint?: string
 ): Promise<void> {
-    const [detail, callers, callees] = await Promise.all([
-        client.getIdentifier(eid),
-        client.getCallers(eid),
-        client.getCallees(eid),
-    ]);
+    let fnid: number;
+    let fnName: string;
+
+    if (isFnid) {
+        // Called from CodeLens with FUNCTIONS.ID directly.
+        fnid = eidOrFnid;
+        fnName = nameHint ?? `function ${fnid}`;
+    } else {
+        // Called from hover with EID — look up function by name.
+        const detail = await client.getIdentifier(eidOrFnid);
+        fnName = detail.identifier.NAME;
+        const fn = await client.getFunctionByName(fnName);
+        if (!fn) {
+            vscode.window.createWebviewPanel(
+                'cscoutCallGraph',
+                `Call graph: ${fnName}`,
+                vscode.ViewColumn.Beside,
+                { enableScripts: true }
+            ).webview.html = `<!doctype html><html><body style="font-family:sans-serif;padding:2em">
+                <p>No call graph available for <strong>${escapeHtml(fnName)}</strong> — not tracked as a callable function.</p>
+                </body></html>`;
+            return;
+        }
+        fnid = fn.ID;
+    }
 
     const panel = vscode.window.createWebviewPanel(
         'cscoutCallGraph',
-        `Call graph: ${detail.identifier.NAME}`,
+        `Call graph: ${fnName}`,
         vscode.ViewColumn.Beside,
         { enableScripts: true }
     );
-    panel.webview.html = renderCallGraphHtml(detail.identifier.NAME, callers, callees);
+
+    try {
+        const http = await import('http');
+        const svg = await new Promise<string>((resolve, reject) => {
+            const baseUrl = new URL(client.getBaseUrl());
+            http.get({
+                host: baseUrl.hostname,
+                port: parseInt(baseUrl.port),
+                path: `/callgraph?fnid=${fnid}`,
+                timeout: 15000,
+            }, (res) => {
+                let body = '';
+                res.setEncoding('utf-8');
+                res.on('data', (chunk) => body += chunk);
+                res.on('end', () => resolve(body));
+            }).on('error', reject).on('timeout', () => reject(new Error('timeout')));
+        });
+        panel.webview.html = makeGraphInteractive(svg);
+    } catch (err) {
+        panel.webview.html = `<!doctype html><html><body style="font-family:sans-serif;padding:2em">
+            <p>Error generating call graph: ${escapeHtml(String(err))}</p>
+            </body></html>`;
+    }
 }
 
-function renderCallGraphHtml(
-    centerName: string,
-    callers: CScoutCallEntry[],
-    callees: CScoutCallEntry[]
-): string {
-    const list = (items: CScoutCallEntry[]) =>
-        items.length === 0
-            ? '<em>none</em>'
-            : '<ul>' +
-            items
-                .map(
-                    (i) =>
-                        `<li>${escapeHtml(i.NAME)} <small>${escapeHtml(path.basename(i.FILE))}</small></li>`
-                )
-                .join('') +
-            '</ul>';
-    return `<!doctype html>
-<html><head><meta charset="utf-8">
-<style>
-body { font-family: var(--vscode-font-family); padding: 1em; }
-h1 { border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: .5em; }
-.columns { display: flex; gap: 2em; }
-.col { flex: 1; }
-h2 { font-size: 1em; color: var(--vscode-descriptionForeground); }
-ul { list-style: none; padding: 0; }
-li { padding: .25em 0; }
-small { color: var(--vscode-descriptionForeground); margin-left: .5em; }
-</style></head><body>
-<h1>${escapeHtml(centerName)}</h1>
-<div class="columns">
-	<div class="col"><h2>Callers (${callers.length})</h2>${list(callers)}</div>
-	<div class="col"><h2>Callees (${callees.length})</h2>${list(callees)}</div>
-</div>
-</body></html>`;
+async function showIncludeGraph(
+    context: vscode.ExtensionContext,
+    client: CScoutClient,
+    writableOnly: boolean = true
+): Promise<void> {
+    const panel = vscode.window.createWebviewPanel(
+        'cscoutIncludeGraph',
+        writableOnly ? 'Include graph (writable files)' : 'Include graph (all files)',
+        vscode.ViewColumn.One,
+        { enableScripts: true }
+    );
+    try {
+        const http = await import('http');
+        const html = await new Promise<string>((resolve, reject) => {
+            const baseUrl = new URL(client.getBaseUrl());
+            http.get({
+                host: baseUrl.hostname,
+                port: parseInt(baseUrl.port),
+                path: `/filegraph/include${writableOnly ? '?writable=1' : ''}`,
+                timeout: 15000,
+            }, (res) => {
+                let body = '';
+                res.setEncoding('utf-8');
+                res.on('data', (chunk) => body += chunk);
+                res.on('end', () => resolve(body));
+            }).on('error', reject).on('timeout', () => reject(new Error('timeout')));
+        });
+        panel.webview.html = makeGraphInteractive(html);
+    } catch (err) {
+        panel.webview.html = `<!doctype html><html><body style="font-family:sans-serif;padding:2em">
+            <p>Error generating include graph: ${escapeHtml(String(err))}</p>
+            </body></html>`;
+    }
 }
 
 async function showFunctionMetrics(
