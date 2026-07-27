@@ -13,6 +13,7 @@
   ],
   "activationEvents": [
     "onLanguage:c",
+    "onLanguage:cpp",
     "workspaceContains:**/*.c"
   ],
   "main": "./out/extension.js",
@@ -31,11 +32,15 @@
       {
         "command": "cscout.reanalyze",
         "title": "CScout: Re-analyze",
-        "icon": "$(refresh)"
+        "icon": "$(sync)"
       },
       {
         "command": "cscout.toggle",
         "title": "CScout: Toggle Start/Stop"
+      },
+      {
+        "command": "cscout.showWalkthrough",
+        "title": "CScout: Getting Started"
       },
       {
         "command": "cscout.refresh",
@@ -51,34 +56,51 @@
         "title": "CScout: Show Function Metrics"
       },
       {
+        "command": "cscout.showFileMetricsAggregate",
+        "title": "CScout: Show File Metrics Table"
+      },
+      {
+        "command": "cscout.showFunMetricsAggregate",
+        "title": "CScout: Show Function Metrics Table"
+      },
+      {
+        "command": "cscout.inspectFile",
+        "title": "CScout: Inspect File Details",
+        "icon": "$(search)"
+      },
+      {
+        "command": "cscout.showIncludeGraph",
+        "title": "CScout: Show Include Graph"
+      },
+      {
         "command": "cscout.showCallGraph",
         "title": "CScout: Show Call Graph"
+      },
+      {
+        "command": "cscout.inspect",
+        "title": "CScout: Inspect Identifier"
+      },
+      {
+        "command": "cscout.loadMore",
+        "title": "CScout: Load More"
+      },
+      {
+        "command": "cscout.findReferences",
+        "title": "CScout: Find References"
+      },
+      {
+        "command": "cscout.rename",
+        "title": "CScout: Rename Symbol"
+      },
+      {
+        "command": "cscout.showFileDep",
+        "title": "CScout: Show File Dependency Graph"
+      },
+      {
+        "command": "cscout.inspect",
+        "title": "CScout: Inspect Identifier"
       }
     ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "cscout.start",
-          "when": "view == cscout.identifiers && cscout.state != ready && cscout.state != analyzing && cscout.state != indexing",
-          "group": "navigation"
-        },
-        {
-          "command": "cscout.stop",
-          "when": "view == cscout.identifiers && cscout.state == ready",
-          "group": "navigation"
-        },
-        {
-          "command": "cscout.refresh",
-          "when": "view == cscout.identifiers && cscout.state == ready",
-          "group": "navigation"
-        },
-        {
-          "command": "cscout.reanalyze",
-          "when": "view == cscout.identifiers && cscout.state == ready",
-          "group": "navigation"
-        }
-      ]
-    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -91,12 +113,38 @@
     "views": {
       "cscout": [
         {
+          "id": "cscout.actions",
+          "name": "Control Panel"
+        },
+        {
           "id": "cscout.identifiers",
           "name": "Identifiers"
         },
         {
           "id": "cscout.files",
           "name": "Files"
+        },
+        {
+          "id": "cscout.functions",
+          "name": "Functions"
+        },
+        {
+          "id": "cscout.filedeps",
+          "name": "File Dependencies"
+        }
+      ]
+    },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "cscout.inspectFile",
+          "when": "viewItem == cscoutFile",
+          "group": "inline"
+        },
+        {
+          "command": "cscout.inspectFile",
+          "when": "viewItem == cscoutFile",
+          "group": "cscout@1"
         }
       ]
     },
@@ -110,8 +158,8 @@
         },
         "cscout.port": {
           "type": "number",
-          "default": 8081,
-          "description": "CScout API server port"
+          "default": 0,
+          "description": "Port on which the csapi.py server listens. Leave as 0 to automatically select a random available port (Recommended). Set to a specific number (e.g. 8081) to force a static port."
         },
         "cscout.binaryPath": {
           "type": "string",
@@ -157,7 +205,8 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "node out/test.js"
+    "test": "node out/test.js",
+    "test-e2e": "python3 ../cscout/src/csapi.py ../cscout/example/awk.db -p 8081 & PID=$!; sleep 2; npm run compile && node out/test.js; kill -9 $PID"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
