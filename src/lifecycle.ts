@@ -22,6 +22,7 @@
 
 import * as cp from 'child_process';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { CScoutClient } from './cscoutClient';
@@ -165,12 +166,7 @@ export class CScoutLifecycle {
 		const csFilePath = pathForCommand(this.csFilePath, cscoutInWsl);
 		const dbPath = pathForCommand(this.dbPath, cscoutInWsl);
 
-		// On Windows+WSL run the whole pipeline inside a single WSL sh invocation
-		// to avoid Windows pipe buffer truncation between two wsl.exe processes.
-		const wslExe = ['C:', 'Windows', 'System32', 'wsl.exe'].join(path.win32.sep);
 		const cmd = `${this.settings.cscoutBinaryPath} -s sqlite -q '${csFilePath}' | ${this.settings.sqlite3Path} '${dbPath}'`;
-
-		this.channel.appendLine(`$ wsl.exe -e sh -c "${cmd}"`);
 
 		return new Promise<void>((resolve, reject) => {
 			if (cscoutInWsl) {
@@ -319,6 +315,7 @@ export class CScoutLifecycle {
 		this.csapiProcess = cp.spawn(resolved.command, resolved.args, {
 			cwd: workspaceRoot,
 			shell: false,
+			stdio: ['pipe', 'pipe', 'pipe']
 		});
 
 		this.csapiProcess.stderr?.on('data', (data: Buffer) => this.channel.append(data.toString()));
@@ -331,7 +328,7 @@ export class CScoutLifecycle {
 			}
 		});
 
-		this.client = new CScoutClient(this.settings.host, this.settings.port);
+		this.client = new CScoutClient(this.settings.host, activePort);
 	}
 
 	/*
