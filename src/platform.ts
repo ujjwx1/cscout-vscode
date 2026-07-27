@@ -169,6 +169,54 @@ export function fromWslPath(wslPath: string): string {
 }
 
 /*
+ * Translate a Windows path to a Cygwin path. C:\Users becomes /cygdrive/c/Users.
+ */
+export function toCygwinPath(winPath: string): string {
+	if (!winPath) return winPath;
+	const match = /^([a-zA-Z]):[\\/](.*)$/.exec(winPath);
+	if (!match) return winPath;
+	const drive = match[1].toLowerCase();
+	const rest = match[2].replace(/\\/g, '/');
+	return `/cygdrive/${drive}/${rest}`;
+}
+
+/*
+ * Translate a Cygwin path to a Windows path. /cygdrive/c/Users becomes C:\Users.
+ */
+export function fromCygwinPath(cygPath: string): string {
+	if (!cygPath) return cygPath;
+	const match = /^\/cygdrive\/([a-zA-Z])\/(.*)$/.exec(cygPath);
+	if (match) {
+		const drive = match[1].toUpperCase();
+		const rest = match[2].replace(/\//g, '\\');
+		return `${drive}:\\${rest}`;
+	}
+	return cygPath;
+}
+
+/*
+ * Centralized translation for Editor -> CScout (backend).
+ */
+export function toCScoutPath(editorPath: string, platform: Platform = detectPlatform()): string {
+	if (!editorPath) return editorPath;
+	if (platform === 'linux' || platform === 'darwin') return editorPath;
+	if (platform === 'cygwin') return toCygwinPath(editorPath);
+	if (platform === 'win32-native') return editorPath.replace(/\\/g, '/');
+	return toWslPath(editorPath);
+}
+
+/*
+ * Centralized translation for CScout (backend) -> Editor.
+ */
+export function toEditorPath(cscoutPath: string, platform: Platform = detectPlatform()): string {
+	if (!cscoutPath) return cscoutPath;
+	if (platform === 'linux' || platform === 'darwin') return cscoutPath;
+	if (platform === 'cygwin') return fromCygwinPath(cscoutPath);
+	if (platform === 'win32-native') return cscoutPath.replace(/\//g, '\\');
+	return fromWslPath(cscoutPath);
+}
+
+/*
  * Normalize a path for the current platform.  When passing paths to a
  * command that will run through wsl, we need WSL-format paths; when
  * passing to a native command, we need native format.

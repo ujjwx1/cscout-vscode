@@ -18,7 +18,7 @@ import {
 } from './cscoutClient';
 import { CScoutLifecycle, CScoutState } from './lifecycle';
 import { CScoutSettings } from './buildSystem';
-import { fromWslPath } from './platform';
+import { toEditorPath, toCScoutPath } from './platform';
 
 const CSCOUT_KEY_FIRST_ACTIVATION = 'cscout.firstActivationShown';
 
@@ -663,17 +663,6 @@ function iconForId(id: CScoutIdentifier): vscode.ThemeIcon {
     return new vscode.ThemeIcon('symbol-variable');
 }
 
-/*
- * Convert a CScout file path back into something VS Code can open.
- * On Windows the paths CScout produces may be either Windows style
- * (from a native install) or /mnt/... (from WSL); we normalize.
- */
-function toEditorPath(p: string): string {
-    if (process.platform === 'win32' && p.startsWith('/')) {
-        return fromWslPath(p);
-    }
-    return p;
-}
 
 async function resolveLnum(client: CScoutClient, fileOrFid: string | number, foffset: number): Promise<number | null> {
     try {

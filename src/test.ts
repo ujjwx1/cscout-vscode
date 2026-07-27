@@ -4,13 +4,13 @@ import * as fs from 'fs';
 
 // Setup VS Code Mocks before importing anything that uses it
 class MockRange {
-    constructor(public start: MockPosition, public end: MockPosition) {}
+    constructor(public start: MockPosition, public end: MockPosition) { }
 }
 class MockPosition {
-    constructor(public line: number, public character: number) {}
+    constructor(public line: number, public character: number) { }
 }
 class MockLocation {
-    constructor(public uri: any, public range: any) {}
+    constructor(public uri: any, public range: any) { }
 }
 class MockHover {
     public contents: any[];
@@ -19,10 +19,10 @@ class MockHover {
     }
 }
 class MockCodeLens {
-    constructor(public range: any, public command?: any) {}
+    constructor(public range: any, public command?: any) { }
 }
 class MockThemeIcon {
-    constructor(public id: string) {}
+    constructor(public id: string) { }
 }
 class MockMarkdownString {
     public value: string = '';
@@ -38,7 +38,7 @@ class MockEventEmitter {
     private listeners: any[] = [];
     event = (listener: any) => {
         this.listeners.push(listener);
-        return { dispose: () => {} };
+        return { dispose: () => { } };
     };
     fire(data?: any) {
         for (const l of this.listeners) { l(data); }
@@ -51,7 +51,7 @@ class MockDisposable {
 }
 
 class MockDocument {
-    constructor(public uri: any, public content: string) {}
+    constructor(public uri: any, public content: string) { }
     get lineCount() { return this.content.split('\n').length; }
     lineAt(line: number) {
         const lines = this.content.split('\n');
@@ -89,15 +89,15 @@ class MockFileSystemWatcher {
 
     onDidChange(listener: any) {
         this.changeListeners.push(listener);
-        return { dispose: () => {} };
+        return { dispose: () => { } };
     }
     onDidCreate(listener: any) {
         this.createListeners.push(listener);
-        return { dispose: () => {} };
+        return { dispose: () => { } };
     }
     onDidDelete(listener: any) {
         this.deleteListeners.push(listener);
-        return { dispose: () => {} };
+        return { dispose: () => { } };
     }
 
     fireChange(uri: any) {
@@ -115,9 +115,9 @@ class MockStatusBarItem {
     public text: string = '';
     public tooltip: string = '';
     public command: any = undefined;
-    show() {}
-    hide() {}
-    dispose() {}
+    show() { }
+    hide() { }
+    dispose() { }
 }
 
 const mockVSCode = {
@@ -137,7 +137,7 @@ const mockVSCode = {
         public tooltip?: string;
         public command?: any;
         public iconPath?: any;
-        constructor(public label: any, public collapsibleState?: any) {}
+        constructor(public label: any, public collapsibleState?: any) { }
     },
     TreeItemCollapsibleState: {
         None: 0,
@@ -158,16 +158,16 @@ const mockVSCode = {
         },
         createWebviewPanel: () => ({
             webview: {
-                onDidReceiveMessage: () => ({ dispose: () => {} }),
+                onDidReceiveMessage: () => ({ dispose: () => { } }),
                 html: ''
             },
-            onDidDispose: () => {}
+            onDidDispose: () => { }
         }),
         activeTextEditor: undefined,
-        registerTreeDataProvider: () => ({ dispose: () => {} }),
+        registerTreeDataProvider: () => ({ dispose: () => { } }),
         createOutputChannel: () => ({
-            append: () => {},
-            appendLine: () => {}
+            append: () => { },
+            appendLine: () => { }
         }),
         createStatusBarItem: () => {
             activeStatusBar = new MockStatusBarItem();
@@ -206,16 +206,16 @@ const mockVSCode = {
     },
     languages: {
         createDiagnosticCollection: () => ({
-            clear: () => {},
-            set: () => {},
-            delete: () => {},
-            dispose: () => {}
+            clear: () => { },
+            set: () => { },
+            delete: () => { },
+            dispose: () => { }
         }),
-        registerHoverProvider: () => ({ dispose: () => {} }),
-        registerDefinitionProvider: () => ({ dispose: () => {} }),
-        registerReferenceProvider: () => ({ dispose: () => {} }),
-        registerRenameProvider: () => ({ dispose: () => {} }),
-        registerCodeLensProvider: () => ({ dispose: () => {} })
+        registerHoverProvider: () => ({ dispose: () => { } }),
+        registerDefinitionProvider: () => ({ dispose: () => { } }),
+        registerReferenceProvider: () => ({ dispose: () => { } }),
+        registerRenameProvider: () => ({ dispose: () => { } }),
+        registerCodeLensProvider: () => ({ dispose: () => { } })
     },
     Uri: {
         file: (p: string) => ({ fsPath: p, path: p, toLowerCase: () => p.toLowerCase() })
@@ -250,15 +250,10 @@ import {
     FunctionTreeProvider,
     FileTreeProvider
 } from './extension';
+import { toEditorPath } from './platform';
 
 const client = new CScoutClient('localhost', 8081);
 
-function toEditorPath(p: string): string {
-    if (process.platform === 'win32' && p.startsWith('/')) {
-        return fromWslPath(p);
-    }
-    return p;
-}
 
 async function runTests() {
     let passed = 0;
@@ -399,7 +394,7 @@ async function runTests() {
         const hoverProvider = new CScoutHoverProvider(() => client);
         const doc = new MockDocument({ fsPath: 'awk/awk.c' }, 'void checkdup() {}');
         const pos = new MockPosition(0, 5);
-        const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) };
+        const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => { } }) };
 
         const hover: any = await hoverProvider.provideHover(doc as any, pos as any, token as any);
         assert(hover !== undefined, 'Hover was undefined');
@@ -412,7 +407,7 @@ async function runTests() {
         const hoverProvider = new CScoutHoverProvider(() => client);
         const doc = new MockDocument({ fsPath: 'awk/awk.c' }, 'void checkdup() {}');
         const pos = new MockPosition(0, 5);
-        const token = { isCancellationRequested: true, onCancellationRequested: () => ({ dispose: () => {} }) };
+        const token = { isCancellationRequested: true, onCancellationRequested: () => ({ dispose: () => { } }) };
 
         const hover = await hoverProvider.provideHover(doc as any, pos as any, token as any);
         assert(hover === undefined, 'Hover was not cancelled');
@@ -423,11 +418,11 @@ async function runTests() {
         const files = await client.getFiles();
         const mainFile = files.find(f => f.NAME.endsWith('main.c'));
         assert(mainFile !== undefined, 'main.c not found in files list');
-        
+
         const pathInDoc = toEditorPath(mainFile!.NAME);
         const realContent = fs.readFileSync(pathInDoc, 'utf-8');
         const doc = new MockDocument({ fsPath: pathInDoc }, realContent);
-        
+
         const lenses = await codeLensProvider.provideCodeLenses(doc as any);
         assert(Array.isArray(lenses), 'Lenses not an array');
         assert(lenses.length > 0, `No lenses returned for ${pathInDoc}`);
@@ -460,10 +455,10 @@ async function runTests() {
 
         const firstPage = await idTree.getChildren(allGroup);
         assert(firstPage.length > 0, 'First page of identifiers is empty');
-        
+
         // Assert that the page is capped at 200 items (or 201 with the load more action)
         assert(firstPage.length <= 201, `Page size is too large: ${firstPage.length}`);
-        
+
         const loadMoreNode = firstPage.find(n => n.kind === 'load-more');
         assert(loadMoreNode !== undefined, 'Load-more node missing');
         if (loadMoreNode && loadMoreNode.kind === 'load-more') {
@@ -609,14 +604,14 @@ async function runTests() {
             let readyCallback: any = undefined;
             const originalStart = CScoutLifecycle.prototype.start;
             const originalReanalyze = CScoutLifecycle.prototype.reanalyze;
-            
-            CScoutLifecycle.prototype.start = async function(this: any, root: string) {
+
+            CScoutLifecycle.prototype.start = async function (this: any, root: string) {
                 readyCallback = this.events.onReady;
                 this.events.onStateChange('analyzing', undefined);
                 this.events.onStateChange('ready', undefined);
             };
-            
-            CScoutLifecycle.prototype.reanalyze = async function(this: any, root: string) {
+
+            CScoutLifecycle.prototype.reanalyze = async function (this: any, root: string) {
                 this.events.onStateChange('analyzing', undefined);
                 this.events.onStateChange('ready', undefined);
             };
@@ -630,17 +625,17 @@ async function runTests() {
                     update: () => Promise.resolve()
                 }
             };
-            
+
             activate(mockContext as any);
 
             // 5. Transition to ready state
             await mockVSCode.commands.executeCommand('cscout.start');
             assert(activeStatusBar !== undefined, 'Status bar not initialized');
             assert(activeStatusBar!.text.includes('CScout'), 'Status bar should show CScout ready');
-            
+
             // 6. Simulate a file change
             assert(activeWatcher !== undefined, 'File watcher not initialized');
-            
+
             mockInfoMessageChoice = 'Re-analyze';
             activeWatcher!.fireChange({ fsPath: 'main.c' } as any);
 
