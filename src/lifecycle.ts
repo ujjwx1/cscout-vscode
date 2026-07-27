@@ -169,10 +169,23 @@ export class CScoutLifecycle {
 		this.channel.appendLine(`$ wsl.exe -e sh -c "${cmd}"`);
 
 		return new Promise<void>((resolve, reject) => {
-			this.cscoutProcess = cp.spawn(wslExe, ['-e', 'sh', '-c', cmd], {
-				cwd: undefined,
-				shell: false,
-			});
+			if (cscoutInWsl) {
+				// On Windows+WSL run the whole pipeline inside a single WSL sh invocation
+				// to avoid Windows pipe buffer truncation between two wsl.exe processes.
+				const wslExe = ['C:', 'Windows', 'System32', 'wsl.exe'].join(path.win32.sep);
+				this.channel.appendLine(`$ wsl.exe -e sh -c "${cmd}"`);
+				this.cscoutProcess = cp.spawn(wslExe, ['-e', 'sh', '-c', cmd], {
+					cwd: undefined,
+					shell: false,
+				});
+			} else {
+				// Native Linux, macOS, or Cygwin
+				this.channel.appendLine(`$ sh -c "${cmd}"`);
+				this.cscoutProcess = cp.spawn('sh', ['-c', cmd], {
+					cwd: undefined,
+					shell: false,
+				});
+			}
 			// sqlite3Process not needed — same process
 			this.sqlite3Process = undefined;
 
