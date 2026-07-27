@@ -47,6 +47,14 @@ export interface CScoutFile {
 	RO: number;
 }
 
+export interface CScoutFileDetail {
+	file: CScoutFile;
+	metrics: Record<string, number>;
+	functions: { ID: number; NAME: string; FANIN: number; FANOUT: number | null; CCYCL1: number | null; LNUM: number | null }[];
+	includes: CScoutFile[];
+	included_by: CScoutFile[];
+}
+
 export interface CScoutFunction {
 	ID: number;
 	NAME: string;
@@ -55,7 +63,9 @@ export interface CScoutFunction {
 	DECLARED: number;
 	FILESCOPED: number;
 	FID: number;
+	FILE: string | null;
 	FOFFSET: number;
+	LNUM: number | null;
 	FANIN: number;
 	FANOUT: number | null;
 	CCYCL1: number | null;
@@ -66,11 +76,8 @@ export interface CScoutLocation {
 	FILE: string;
 	FOFFSET: number;
 	LNUM: number | null;
-}
-
-export interface CScoutIdDetail {
-	identifier: CScoutIdentifier;
-	locations: CScoutLocation[];
+	LINE_START_OFFSET?: number;
+	RO: number;
 }
 
 export interface CScoutCallEntry {
@@ -111,12 +118,42 @@ export interface CScoutProject {
 	NAME: string;
 }
 
+export interface CScoutIdentifierDetail {
+	identifier: CScoutIdentifier;
+	locations: CScoutLocation[];
+	occurrences: number;
+	projects: CScoutProject[];
+	dependent_files: { FID: number; NAME: string; RO: number }[];
+	associated_functions: { ID: number; NAME: string; FILE: string; FOFFSET: number }[];
+	function_detail: {
+		function: CScoutFunction;
+		callers_count: number;
+		callees_count: number;
+		definition: { FUNCTIONID: number; FIDBEGIN: number; FOFFSETBEGIN: number; FIDEND: number; FOFFSETEND: number; FILE: string } | null;
+		metrics: CScoutFuncMetric[];
+	} | null;
+}
+
+export type CScoutIdDetail = CScoutIdentifierDetail;
+
+export interface CScoutRefactorApplyResult {
+	old_name: string;
+	new_name: string;
+	modified_files: string[];
+	total_replacements: number;
+}
+
 export interface IdentifierFilters {
 	unused?: boolean;
 	macro?: boolean;
 	fun?: boolean;
 	readonly?: boolean;
+	lscope?: boolean;
+	cscope?: boolean;
+	macroarg?: boolean;
+	ordinary?: boolean;
 	should_be_static?: boolean;
+	file_spanning?: boolean;
 	name?: string;
 	limit?: number;
 	offset?: number;
@@ -125,6 +162,9 @@ export interface IdentifierFilters {
 export interface FunctionFilters {
 	defined?: boolean;
 	filescoped?: boolean;
+	ismacro?: boolean;
+	fanin?: number;
+	max_fanin?: number;
 	limit?: number;
 	offset?: number;
 }
@@ -132,6 +172,10 @@ export interface FunctionFilters {
 export class CScoutClient {
 
 	constructor(private host: string, private port: number) { }
+
+	getBaseUrl(): string {
+		return `http://${this.host}:${this.port}`;
+	}
 
 	/*
 	 * Basic GET returning parsed JSON.  Rejects on network error,
@@ -199,12 +243,42 @@ export class CScoutClient {
 		return this.get<CScoutIdentifier[]>('/identifiers' + this.buildQuery(filters as Record<string, unknown>));
 	}
 
-	async getIdentifier(eid: number): Promise<CScoutIdDetail> {
-		return this.get<CScoutIdDetail>(`/identifier?eid=${eid}`);
+	/**
+	 * Fetch per-category identifier counts with a single SQL query.
+	 * Used by the sidebar to show folder counts without loading all rows.
+	 */
+	async getIdentifierCounts(): Promise<Record<string, number>> {
+		return this.get<Record<string, number>>('/identifiers/counts');
+	}
+
+	async getIdentifier(eid: number): Promise<CScoutIdentifierDetail> {
+		return this.get<CScoutIdentifierDetail>(`/identifier?eid=${eid}`);
 	}
 
 	async getFiles(): Promise<CScoutFile[]> {
 		return this.get<CScoutFile[]>('/files');
+	}
+
+	async getWritableFiles(): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>('/files/writable');
+	}
+	async getReadonlyFiles(): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>('/files/readonly');
+	}
+	async getFilesWithUnused(): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>('/files/with-unused');
+	}
+	async getFilesNoStatements(): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>('/files/no-statements');
+	}
+	async getFilesUnprocessed(): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>('/files/unprocessed');
+	}
+	async getFilesWithStrings(): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>('/files/with-strings');
+	}
+	async getFilesHWithIncludes(): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>('/files/h-with-includes');
 	}
 
 	async getFilemetrics(fid: number): Promise<CScoutFileMetric[]> {
@@ -213,6 +287,30 @@ export class CScoutClient {
 
 	async getFunctions(filters: FunctionFilters = {}): Promise<CScoutFunction[]> {
 		return this.get<CScoutFunction[]>('/functions' + this.buildQuery(filters as Record<string, unknown>));
+	}
+
+	/**
+	 * Fetch per-category function counts with a single SQL query.
+	 * Used by the sidebar to show folder counts without loading all rows.
+	 */
+	async getFunctionCounts(): Promise<Record<string, number>> {
+		return this.get<Record<string, number>>('/functions/counts');
+	}
+
+	/**
+	 * Fetch a single function by exact name (defined functions only).
+	 * Used by hover to get CCYCL1 without fetching all 10,000+ functions.
+	 */
+	async getFunctionByName(name: string): Promise<CScoutFunction | null> {
+		return this.get<CScoutFunction | null>(`/functions/byname?name=${encodeURIComponent(name)}`);
+	}
+
+	/**
+	 * Fetch per-category file counts with a single SQL query.
+	 * Replaces 8 parallel API calls when the Files panel opens.
+	 */
+	async getFileCounts(): Promise<Record<string, number>> {
+		return this.get<Record<string, number>>('/files/counts');
 	}
 
 	async getFunmetrics(fnid: number): Promise<CScoutFuncMetric[]> {
@@ -249,8 +347,29 @@ export class CScoutClient {
 			/* server is gone or was never running — expected */
 		}
 	}
+	async getIdentifierDetail(eid: number): Promise<CScoutIdentifierDetail> {
+		return this.get<CScoutIdentifierDetail>(`/identifier/detail?eid=${eid}`);
+	}
 
-	getBaseUrl(): string {
-		return `http://${this.host}:${this.port}`;
+	async getFilemetricsAggregate(): Promise<CScoutFileMetric[]> {
+		return this.get<CScoutFileMetric[]>('/filemetrics/aggregate');
+	}
+
+	async getFunmetricsAggregate(): Promise<CScoutFuncMetric[]> {
+		return this.get<CScoutFuncMetric[]>('/funmetrics/aggregate');
+	}
+
+	async getFileDetail(fid: number): Promise<CScoutFileDetail> {
+		return this.get<CScoutFileDetail>(`/file/detail?fid=${fid}`);
+	}
+
+	async getProjectFiles(pid: number): Promise<CScoutFile[]> {
+		return this.get<CScoutFile[]>(`/project/files?pid=${pid}`);
+	}
+
+	async applyRename(eid: number, newName: string): Promise<CScoutRefactorApplyResult> {
+		return this.get<CScoutRefactorApplyResult>(
+			`/refactor/apply?eid=${eid}&newname=${encodeURIComponent(newName)}`
+		);
 	}
 }
