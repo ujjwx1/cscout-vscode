@@ -979,6 +979,22 @@ export function activate(context: vscode.ExtensionContext): void {
             const target = fnid ?? (await promptForFunctionEid(client));
             if (target === undefined) return;
             await showFunctionMetrics(context, client, target);
+        }),
+        vscode.commands.registerCommand('cscout.showFileMetricsAggregate', async () => {
+            const client = lifecycle.getClient();
+            if (!client) return;
+            const metrics = await client.getFilemetricsAggregate();
+            const files = await client.getFiles();
+            showFileMetricsAggregatePanel(context, metrics, files);
+        }),
+        vscode.commands.registerCommand('cscout.showFunMetricsAggregate', async () => {
+            const client = lifecycle.getClient();
+            if (!client) return;
+            const metrics = await client.getFunmetricsAggregate();
+            const fns = await client.getFunctions({ defined: true, limit: 10000 });
+            showFunMetricsAggregatePanel(context, metrics, fns);
+        }),
+        vscode.commands.registerCommand('cscout.inspectFile', async (nodeOrFid?: any) => {
         vscode.commands.registerCommand('cscout.showWalkthrough', () => {
             showWalkthrough(context);
         }),
@@ -1279,6 +1295,157 @@ table { border-collapse: collapse; width: 100%; }
 td { padding: .25em .75em; border-bottom: 1px solid var(--vscode-panel-border); }
 td:first-child { color: var(--vscode-descriptionForeground); }
 </style></head><body>${rows}</body></html>`;
+function showFileMetricsAggregatePanel(
+    context: vscode.ExtensionContext,
+    metrics: any[],
+    files: any[]
+): void {
+    const panel = vscode.window.createWebviewPanel(
+        'cscoutFileMetricsAggregate',
+        'File Metrics Table',
+        vscode.ViewColumn.One,
+        { enableScripts: true }
+    );
+    const fidToName = new Map(files.map(f => [f.FID, f.NAME]));
+    const fileRows = metrics.filter((m: any) => m.PRECPP === 0);
+    const cols = Object.keys(METRIC_DESCRIPTIONS);
+    const headerCells = cols
+        .map((k, i) => `<th data-col="${i + 1}" onclick="sortBy(${i + 1})" style="cursor:pointer;text-align:right" title="${escapeHtml(METRIC_DESCRIPTIONS[k])}">${escapeHtml(k)}</th>`)
+        .join('');
+    const rows = fileRows.map(m => {
+        const fileName = fidToName.get(m.FID) ?? String(m.FID);
+        const cells = cols.map(k => {
+            const v = m[k];
+            const display = v !== null && v !== undefined ? escapeHtml(String(v)) : '—';
+            const sortVal = v !== null && v !== undefined ? String(v) : '';
+            return `<td style="text-align:right" data-val="${sortVal}">${display}</td>`;
+        }).join('');
+        return `<tr data-file="${escapeHtml(fileName)}"><td data-val="${escapeHtml(fileName)}">${escapeHtml(fileName)}</td>${cells}</tr>`;
+    }).join('');
+    const listener = panel.webview.onDidReceiveMessage(async msg => {
+        if (msg.command === 'open' && msg.file) {
+            const uri = vscode.Uri.file(toEditorPath(msg.file));
+            await vscode.window.showTextDocument(uri);
+        }
+    });
+    panel.onDidDispose(() => listener.dispose());
+    panel.webview.html = `<!doctype html><html><head><style>
+        body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);color:var(--vscode-foreground);background:var(--vscode-editor-background);padding:1em}
+        table{border-collapse:collapse;width:100%}
+        th,td{padding:4px 8px;border:1px solid var(--vscode-panel-border);white-space:nowrap}
+        th{background:var(--vscode-editor-background);position:sticky;top:0;cursor:pointer;border-bottom:2px solid var(--vscode-panel-border)}
+        th:hover{background:var(--vscode-list-hoverBackground)}
+        tr:hover td{background:var(--vscode-list-hoverBackground);cursor:pointer}
+        td:first-child{text-align:left;max-width:300px;overflow:hidden;text-overflow:ellipsis}
+    </style></head><body>
+    <h2>File Metrics</h2>
+    <p>Click a column header to sort. Click a row to open the file.</p>
+    <div style="overflow:auto;max-height:80vh">
+    <table id="t"><thead><tr><th data-col="0" onclick="sortBy(0)" style="cursor:pointer;text-align:left">File</th>${headerCells}</tr></thead>
+    <tbody id="tb">${rows}</tbody></table></div>
+    <script>
+    const vscode = acquireVsCodeApi();
+    let sortCol=0, sortAsc=false;
+    function sortBy(col){
+        if(sortCol===col){sortAsc=!sortAsc;}else{sortCol=col;sortAsc=false;}
+        const tb=document.getElementById('tb');
+        const rows=[...tb.rows];
+        rows.sort((a,b)=>{
+            const av=a.cells[col]?.dataset.val??'';
+            const bv=b.cells[col]?.dataset.val??'';
+            const an=parseFloat(av), bn=parseFloat(bv);
+            if(!isNaN(an)&&!isNaN(bn)) return sortAsc?an-bn:bn-an;
+            return sortAsc?av.localeCompare(bv):bv.localeCompare(av);
+        });
+        rows.forEach(r=>tb.appendChild(r));
+    }
+    document.getElementById('tb').addEventListener('click',e=>{
+        const row=e.target.closest('tr');
+        if(row) vscode.postMessage({command:'open', file:row.dataset.file});
+    });
+    </script>
+    </body></html>`;
+}
+
+function showFunMetricsAggregatePanel(
+    context: vscode.ExtensionContext,
+    metrics: any[],
+    fns: any[]
+): void {
+    const panel = vscode.window.createWebviewPanel(
+        'cscoutFunMetricsAggregate',
+        'Function Metrics Table',
+        vscode.ViewColumn.One,
+        { enableScripts: true }
+    );
+    const fnMap = new Map(fns.map(f => [f.ID, f]));
+    const cols = Object.keys(METRIC_DESCRIPTIONS);
+    const headerCells = cols
+        .map((k, i) => `<th data-col="${i + 1}" onclick="sortBy(${i + 1})" style="cursor:pointer;text-align:right" title="${escapeHtml(METRIC_DESCRIPTIONS[k])}">${escapeHtml(k)}</th>`)
+        .join('');
+    const postRows = metrics.filter((m: any) => m.PRECPP === 0);
+    const rows = postRows.map((m: any) => {
+        const fn = fnMap.get(m.FUNCTIONID);
+        const fnName = fn ? fn.NAME : String(m.FUNCTIONID);
+        const fnFile = fn ? (fn.FILE ?? '') : '';
+        const fnLnum = fn?.LNUM ?? 0;
+        const cells = cols.map(k => {
+            const v = m[k];
+            const display = v !== null && v !== undefined ? escapeHtml(String(v)) : '—';
+            const sortVal = v !== null && v !== undefined ? String(v) : '';
+            return `<td style="text-align:right" data-val="${sortVal}">${display}</td>`;
+        }).join('');
+        return `<tr data-file="${escapeHtml(fnFile)}" data-lnum="${fnLnum}"><td data-val="${escapeHtml(fnName)}">${escapeHtml(fnName)}</td>${cells}</tr>`;
+    }).join('');
+    const listener = panel.webview.onDidReceiveMessage(async msg => {
+        if (msg.command === 'open' && msg.file) {
+            const uri = vscode.Uri.file(toEditorPath(msg.file));
+            const doc = await vscode.workspace.openTextDocument(uri);
+            const line = Math.max(0, (msg.lnum || 1) - 1);
+            await vscode.window.showTextDocument(doc, {
+                selection: new vscode.Range(line, 0, line, 0)
+            });
+        }
+    });
+    panel.onDidDispose(() => listener.dispose());
+    panel.webview.html = `<!doctype html><html><head><style>
+        body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);color:var(--vscode-foreground);background:var(--vscode-editor-background);padding:1em}
+        table{border-collapse:collapse;width:100%}
+        th,td{padding:4px 8px;border:1px solid var(--vscode-panel-border);white-space:nowrap}
+        th{background:var(--vscode-editor-background);position:sticky;top:0;cursor:pointer;border-bottom:2px solid var(--vscode-panel-border)}
+        th:hover{background:var(--vscode-list-hoverBackground)}
+        tr:hover td{background:var(--vscode-list-hoverBackground);cursor:pointer}
+        td:first-child{text-align:left;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+    </style></head><body>
+    <h2>Function Metrics</h2>
+    <p>Click a column header to sort. Click a row to navigate to the function definition.</p>
+    <div style="overflow:auto;max-height:80vh">
+    <table id="t"><thead><tr><th data-col="0" onclick="sortBy(0)" style="cursor:pointer;text-align:left">Function</th>${headerCells}</tr></thead>
+    <tbody id="tb">${rows}</tbody></table></div>
+    <script>
+    const vscode = acquireVsCodeApi();
+    let sortCol=0, sortAsc=false;
+    function sortBy(col){
+        if(sortCol===col){sortAsc=!sortAsc;}else{sortCol=col;sortAsc=false;}
+        const tb=document.getElementById('tb');
+        const rows=[...tb.rows];
+        rows.sort((a,b)=>{
+            const av=a.cells[col]?.dataset.val??'';
+            const bv=b.cells[col]?.dataset.val??'';
+            const an=parseFloat(av), bn=parseFloat(bv);
+            if(!isNaN(an)&&!isNaN(bn)) return sortAsc?an-bn:bn-an;
+            return sortAsc?av.localeCompare(bv):bv.localeCompare(av);
+        });
+        rows.forEach(r=>tb.appendChild(r));
+    }
+    document.getElementById('tb').addEventListener('click',e=>{
+        const row=e.target.closest('tr');
+        if(row&&row.dataset.file) vscode.postMessage({command:'open', file:row.dataset.file, lnum:parseInt(row.dataset.lnum||'0')});
+    });
+    </script>
+    </body></html>`;
+}
+
 function showWalkthrough(context: vscode.ExtensionContext): void {
     const panel = vscode.window.createWebviewPanel(
         'cscoutWalkthrough',
