@@ -198,12 +198,68 @@ class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
 
         return [];
     }
-}
-
-class FileTreeProvider implements vscode.TreeDataProvider<Node> {
+class ActionTreeProvider implements vscode.TreeDataProvider<Node> {
     private _emitter = new vscode.EventEmitter<Node | undefined | void>();
     readonly onDidChangeTreeData = this._emitter.event;
-    private cache: CScoutFile[] = [];
+    private state: CScoutState = 'stopped';
+
+    setState(state: CScoutState) {
+        this.state = state;
+        this.refresh();
+    }
+
+    refresh(): void {
+        this._emitter.fire();
+    }
+
+    getTreeItem(node: Node): vscode.TreeItem {
+        if (node.kind === 'action') {
+            const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
+            item.command = { command: node.command, title: node.label, arguments: node.args };
+
+            // Assign corresponding icons based on the command
+            switch (node.command) {
+                case 'cscout.start': item.iconPath = new vscode.ThemeIcon('play'); break;
+                case 'cscout.stop': item.iconPath = new vscode.ThemeIcon('debug-stop'); break;
+                case 'cscout.refresh': item.iconPath = new vscode.ThemeIcon('refresh'); break;
+                case 'cscout.reanalyze': item.iconPath = new vscode.ThemeIcon('sync'); break;
+                case 'workbench.action.openSettings': item.iconPath = new vscode.ThemeIcon('settings'); break;
+                case 'cscout.showWalkthrough': item.iconPath = new vscode.ThemeIcon('book'); break;
+                default: item.iconPath = new vscode.ThemeIcon('play');
+            }
+            return item;
+        }
+        return new vscode.TreeItem('?', vscode.TreeItemCollapsibleState.None);
+    }
+
+    async getChildren(node?: Node): Promise<Node[]> {
+        if (node) return [];
+
+        if (this.state === 'stopped' || this.state === 'error') {
+            return [
+                { kind: 'action', label: 'Start CScout', command: 'cscout.start' },
+                { kind: 'action', label: 'Tutorial', command: 'cscout.showWalkthrough' },
+                { kind: 'action', label: 'Configure CScout', command: 'workbench.action.openSettings', args: ['cscout'] }
+            ];
+        } else {
+            return [
+                { kind: 'action', label: 'Stop CScout', command: 'cscout.stop' },
+                { kind: 'action', label: 'Refresh UI', command: 'cscout.refresh' },
+                { kind: 'action', label: 'Re-analyze Codebase', command: 'cscout.reanalyze' },
+                { kind: 'action', label: 'Configure CScout', command: 'workbench.action.openSettings', args: ['cscout'] }
+            ];
+        }
+    }
+}
+
+export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
+    private _emitter = new vscode.EventEmitter<Node | undefined | void>();
+    readonly onDidChangeTreeData = this._emitter.event;
+
+    // Bounded memory: only stores pages the user has actually expanded.
+    private groupItems: Map<string, CScoutFile[]> = new Map();
+    private groupTotals: Map<string, number> = new Map();
+    private counts: Record<string, number> | null = null;
 
     constructor(private getClient: () => CScoutClient | undefined) { }
 
@@ -778,6 +834,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const identifierProvider = new IdentifierTreeProvider(() => lifecycle.getClient());
     const fileProvider = new FileTreeProvider(() => lifecycle.getClient());
+    const actionProvider = new ActionTreeProvider();
+    actionProvider.setState(currentState);
 
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('cscout.identifiers', identifierProvider),
@@ -885,6 +943,10 @@ export function activate(context: vscode.ExtensionContext): void {
             const target = fnid ?? (await promptForFunctionEid(client));
             if (target === undefined) return;
             await showFunctionMetrics(context, client, target);
+        vscode.commands.registerCommand('cscout.showWalkthrough', () => {
+            showWalkthrough(context);
+        }),
+        vscode.commands.registerCommand('cscout.loadMore', async (node) => {
         })
     );
 
@@ -1059,6 +1121,131 @@ table { border-collapse: collapse; width: 100%; }
 td { padding: .25em .75em; border-bottom: 1px solid var(--vscode-panel-border); }
 td:first-child { color: var(--vscode-descriptionForeground); }
 </style></head><body>${rows}</body></html>`;
+function showWalkthrough(context: vscode.ExtensionContext): void {
+    const panel = vscode.window.createWebviewPanel(
+        'cscoutWalkthrough',
+        'CScout — Getting Started',
+        vscode.ViewColumn.One,
+        { enableScripts: true }
+    );
+    panel.webview.html = getWalkthroughHtml();
+    const listener = panel.webview.onDidReceiveMessage((msg) => {
+        if (msg.command === 'openSettings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'cscout');
+        }
+    });
+    panel.onDidDispose(() => listener.dispose());
+}
+
+function getWalkthroughHtml(): string {
+    return `<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+body { font-family: var(--vscode-font-family); padding: 2em; max-width: 800px; line-height: 1.6; }
+h1 { color: var(--vscode-textLink-foreground); border-bottom: 2px solid var(--vscode-panel-border); padding-bottom: .5em; }
+h2 { margin-top: 2em; color: var(--vscode-textLink-foreground); }
+.step { background: var(--vscode-editor-inactiveSelectionBackground); border-radius: 6px; padding: 1em 1.5em; margin: 1em 0; border-left: 3px solid var(--vscode-textLink-foreground); }
+.step-number { font-size: .8em; font-weight: bold; color: var(--vscode-descriptionForeground); text-transform: uppercase; letter-spacing: .1em; }
+code { background: var(--vscode-textCodeBlock-background); padding: .1em .4em; border-radius: 3px; font-family: var(--vscode-editor-font-family); }
+pre { background: var(--vscode-textCodeBlock-background); padding: 1em; border-radius: 6px; overflow-x: auto; }
+pre code { background: none; padding: 0; }
+button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: .5em 1.2em; border-radius: 4px; cursor: pointer; font-size: .95em; margin-top: .5em; }
+button:hover { background: var(--vscode-button-hoverBackground); }
+.check { color: #4caf50; font-weight: bold; }
+.warn { color: var(--vscode-inputValidation-warningForeground); }
+table { border-collapse: collapse; width: 100%; margin: .5em 0; }
+td, th { padding: .4em .8em; border-bottom: 1px solid var(--vscode-panel-border); text-align: left; }
+th { color: var(--vscode-descriptionForeground); font-size: .9em; }
+</style>
+</head><body>
+
+<h1>🔍 CScout — Getting Started</h1>
+<p>CScout is a whole-program C source code analyzer that understands the C preprocessor. This extension brings CScout's analysis directly into VS Code.</p>
+
+<div class="step">
+<div class="step-number">Step 1 — Prerequisites</div>
+<h2>Install Required Tools</h2>
+<p>The extension needs the following tools installed on your system (Linux/macOS) or accessible via WSL (Windows):</p>
+<table>
+<tr><th>Tool</th><th>Purpose</th><th>Install</th></tr>
+<tr><td><code>cscout</code></td><td>C analysis engine</td><td><a href="https://github.com/dspinellis/cscout">Build from source</a></td></tr>
+<tr><td><code>python3</code></td><td>Runs csapi.py REST server</td><td>System package manager</td></tr>
+<tr><td><code>sqlite3</code></td><td>Stores analysis database</td><td>System package manager</td></tr>
+</table>
+<p>On Ubuntu/Debian: <code>sudo apt install python3 sqlite3</code></p>
+</div>
+
+<div class="step">
+<div class="step-number">Step 2 — Configure Paths</div>
+<h2>Set Up Extension Settings</h2>
+<p>Tell the extension where to find the CScout tools:</p>
+<pre><code># In VS Code settings (cscout.*):
+cscout.binaryPath     — path to the cscout binary
+cscout.cscocoPyPath   — path to cscoco.py (for CMake/Meson projects)
+cscout.csapiPyPath    — path to csapi.py (REST server)
+cscout.csmakePath     — path to csmake (for Makefile projects)</code></pre>
+<button onclick="openSettings()">Open CScout Settings</button>
+</div>
+
+<div class="step">
+<div class="step-number">Step 3 — Open a C Project</div>
+<h2>Supported Build Systems</h2>
+<p>Open any C project folder in VS Code. The extension supports:</p>
+<table>
+<tr><th>Build System</th><th>How it works</th></tr>
+<tr><td>Existing <code>.cs</code> file</td><td>Used directly — fastest option</td></tr>
+<tr><td>CMake</td><td>Runs <code>cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON</code> then cscoco</td></tr>
+<tr><td>Meson</td><td>Runs <code>meson setup build</code> then cscoco</td></tr>
+<tr><td>Makefile</td><td>Intercepts build with csmake</td></tr>
+<tr><td>Autotools</td><td>Runs <code>./configure</code> then csmake</td></tr>
+</table>
+</div>
+
+<div class="step">
+<div class="step-number">Step 4 — Start Analysis</div>
+<h2>Run CScout</h2>
+<p>Click the <strong>▶ Start CScout</strong> button in the sidebar, or run:</p>
+<pre><code>Ctrl+Shift+P → CScout: Start Analysis</code></pre>
+<p>The extension will:</p>
+<ul>
+<li>Detect your build system and ask which to use</li>
+<li>Generate a CScout workspace file (<code>.cs</code>)</li>
+<li>Run CScout analysis and build a SQLite database</li>
+<li>Start the csapi REST server</li>
+<li>Populate all sidebar panels</li>
+</ul>
+<p>Status bar shows: <code>⟳ CScout: Analyzing...</code> → <code>✓ CScout · N files</code></p>
+</div>
+
+<div class="step">
+<div class="step-number">Step 5 — Explore Results</div>
+<h2>What You Can Do</h2>
+<table>
+<tr><th>Feature</th><th>How to use</th></tr>
+<tr><td>Browse identifiers</td><td>Expand groups in the Identifiers panel</td></tr>
+<tr><td>Hover for info</td><td>Hover over any identifier in a C file</td></tr>
+<tr><td>Go to definition</td><td>Ctrl+Click on any identifier</td></tr>
+<tr><td>Find all references</td><td>Shift+F12 on any identifier</td></tr>
+<tr><td>Rename identifier</td><td>F2 on any identifier (whole-program rename)</td></tr>
+<tr><td>Inspect identifier</td><td>Click Inspect in the hover tooltip</td></tr>
+<tr><td>Call graph</td><td>Click Call Graph in the hover tooltip</td></tr>
+<tr><td>Unused warnings</td><td>Check the Problems panel</td></tr>
+</table>
+</div>
+
+<hr>
+<p style="color: var(--vscode-descriptionForeground); font-size: .9em;">
+CScout is developed by <a href="https://github.com/dspinellis">Diomidis Spinellis</a>.
+The VS Code extension is part of GSoC 2026.
+</p>
+
+<script>
+const vscode = acquireVsCodeApi();
+function openSettings() {
+    vscode.postMessage({ command: 'openSettings' });
+}
+</script>
+</body></html>`;
 }
 
 function escapeHtml(s: string): string {
