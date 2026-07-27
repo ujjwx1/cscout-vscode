@@ -234,17 +234,80 @@ export class CScoutLifecycle {
 		);
 	}
 
+	private async getAvailablePort(): Promise<number> {
+		return new Promise((resolve, reject) => {
+			const server = net.createServer();
+			server.unref();
+			server.on('error', reject);
+			server.listen(0, '127.0.0.1', () => {
+				const address = server.address();
+				if (address && typeof address !== 'string') {
+					const port = address.port;
+					server.close(() => resolve(port));
+				} else {
+					server.close(() => reject(new Error('Failed to get dynamic port')));
+				}
+			});
+		});
+	}
+
 	private async startCsapi(workspaceRoot: string): Promise<void> {
 		if (!this.dbPath) {
 			throw new Error('Internal error: dbPath not set');
 		}
+
+		const pidFilePath = path.join(workspaceRoot, `${this.lastBuildResult?.projectName || 'cscout'}.pid.json`);
+
+		// Pre-flight cleanup
+		if (fs.existsSync(pidFilePath)) {
+			try {
+				this.channel.appendLine('Found stale PID file. Attempting pre-flight cleanup...');
+				const pidData = JSON.parse(fs.readFileSync(pidFilePath, 'utf-8'));
+				if (pidData.port && pidData.pid) {
+					// 1. Try graceful HTTP quit
+					try {
+						const tempClient = new CScoutClient(this.settings.host, pidData.port);
+						await tempClient.quit();
+					} catch (e) {
+						// Ignored, might already be dead
+					}
+					// Wait a moment for it to exit
+					await new Promise((r) => setTimeout(r, 200));
+					
+					// 2. Hard kill by PID
+					const inWsl = commandRunsInWsl(this.settings.pythonPath);
+					if (inWsl) {
+						this.channel.appendLine(`Killing WSL process ${pidData.pid}`);
+						try { cp.execSync(`wsl.exe kill -9 ${pidData.pid}`, { stdio: 'ignore' }); } catch (e) { /* ignored */ }
+					} else {
+						this.channel.appendLine(`Killing native process ${pidData.pid}`);
+						try { process.kill(pidData.pid, 'SIGKILL'); } catch (e) { /* ignored */ }
+					}
+				}
+				// 3. Delete file
+				fs.unlinkSync(pidFilePath);
+			} catch (e) {
+				this.channel.appendLine(`Pre-flight cleanup failed: ${e}`);
+			}
+		}
+
+		let activePort = this.settings.port;
+		if (!activePort || activePort === 0) {
+			this.channel.appendLine('Dynamic port requested (0). Fetching available port...');
+			activePort = await this.getAvailablePort();
+		}
+		
+		this.channel.appendLine(`Starting csapi.py on port ${activePort}`);
 
 		const pythonInWsl = commandRunsInWsl(this.settings.pythonPath);
 		const resolved = resolveCommand(this.settings.pythonPath, [
 			pathForCommand(this.settings.csapiPyPath, pythonInWsl),
 			pathForCommand(this.dbPath, pythonInWsl),
 			'-p',
-			String(this.settings.port),
+			String(activePort),
+			'--monitor-stdin',
+			'--pid-file',
+			pathForCommand(pidFilePath, pythonInWsl)
 		]);
 
 		this.channel.appendLine(`$ ${resolved.command} ${resolved.args.join(' ')}`);
