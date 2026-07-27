@@ -115,9 +115,13 @@ export class CScoutLifecycle {
 
 					this.dbPath = path.join(workspaceRoot, `${buildResult.projectName}.db`);
 
-					// 2 & 3. Run cscout -s sqlite | sqlite3 project.db
-					progress.report({ message: 'Analyzing source code (this may take a while)...' });
-					await this.runAnalysisPipeline(workspaceRoot, progress);
+					if (buildResult.buildSystem === 'existing-cs' && fs.existsSync(this.dbPath)) {
+						this.channel.appendLine(`Found existing database at ${this.dbPath}. Skipping analysis step.`);
+					} else {
+						// 2 & 3. Run cscout -s sqlite | sqlite3 project.db
+						progress.report({ message: 'Analyzing source code (this may take a while)...' });
+						await this.runAnalysisPipeline(workspaceRoot, progress);
+					}
 
 					// 4. Start csapi
 					this.setState('indexing');
