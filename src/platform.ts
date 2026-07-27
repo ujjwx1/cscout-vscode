@@ -47,6 +47,28 @@ export function detectPlatform(): Platform {
 	return 'linux';
 }
 
+let wslMountRoot = '/mnt/';
+
+export function setWslMountRootForTesting(root: string) {
+	wslMountRoot = root;
+}
+
+function detectWslMountRoot() {
+	if (process.platform !== 'win32') {
+		return;
+	}
+	try {
+		const out = cp.execSync('C:\\Windows\\System32\\wsl.exe wslpath "C:\\"', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
+		const parsed = out.trim();
+		const match = /^(.*\/)c\/$/.exec(parsed.toLowerCase());
+		if (match) {
+			wslMountRoot = match[1];
+		}
+	} catch {
+		wslMountRoot = '/mnt/';
+	}
+}
+
 /*
  * Best-effort check for WSL availability on Windows.  Called once at
  * activation; result is cached.  We keep this synchronous because it
@@ -64,6 +86,7 @@ export function isWslAvailable(): boolean {
 	try {
 		cp.execSync('C:\\Windows\\System32\\wsl.exe --status', { stdio: 'ignore', timeout: 3000 });
 		wslAvailable = true;
+		detectWslMountRoot();
 	} catch {
 		wslAvailable = false;
 	}
@@ -121,7 +144,7 @@ export function toWslPath(winPath: string): string {
 	}
 	const drive = match[1].toLowerCase();
 	const rest = match[2].replace(/\\/g, '/');
-	return `/mnt/${drive}/${rest}`;
+	return `${wslMountRoot}${drive}/${rest}`;
 }
 
 /*
@@ -133,13 +156,16 @@ export function fromWslPath(wslPath: string): string {
 	if (!wslPath) {
 		return wslPath;
 	}
-	const match = /^\/mnt\/([a-zA-Z])\/(.*)$/.exec(wslPath);
-	if (!match) {
-		return wslPath;
+	if (wslPath.startsWith(wslMountRoot)) {
+		const withoutRoot = wslPath.substring(wslMountRoot.length);
+		const match = /^([a-zA-Z])\/(.*)$/.exec(withoutRoot);
+		if (match) {
+			const drive = match[1].toUpperCase();
+			const rest = match[2].replace(/\//g, '\\');
+			return `${drive}:\\${rest}`;
+		}
 	}
-	const drive = match[1].toUpperCase();
-	const rest = match[2].replace(/\//g, '\\');
-	return `${drive}:\\${rest}`;
+	return wslPath;
 }
 
 /*
@@ -154,7 +180,7 @@ export function pathForCommand(p: string, commandRunsInWsl: boolean): string {
 	if (commandRunsInWsl && /^[a-zA-Z]:[\\/]/.test(p)) {
 		return toWslPath(p);
 	}
-	if (!commandRunsInWsl && p.startsWith('/mnt/') && process.platform === 'win32') {
+	if (!commandRunsInWsl && p.startsWith(wslMountRoot) && process.platform === 'win32') {
 		return fromWslPath(p);
 	}
 	return p;
