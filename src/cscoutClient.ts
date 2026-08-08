@@ -19,6 +19,9 @@ export interface CScoutIdentifier {
 	NAME: string;
 	READONLY: number;
 	UNDEFMACRO: number;
+	UNDEFEDMACRO?: number;
+	REDEFEDSAMEMACRO?: number;
+	REDEFEDDIFFMACRO?: number;
 	MACRO: number;
 	FUNMACRO: number;
 	MACROARG: number;
@@ -53,6 +56,11 @@ export interface CScoutFileDetail {
 	functions: { ID: number; NAME: string; FANIN: number; FANOUT: number | null; CCYCL1: number | null; LNUM: number | null }[];
 	includes: CScoutFile[];
 	included_by: CScoutFile[];
+}
+
+export interface CScoutAttribute {
+	id: string;
+	name: string;
 }
 
 export interface CScoutFunction {
@@ -144,27 +152,16 @@ export interface CScoutRefactorApplyResult {
 }
 
 export interface IdentifierFilters {
-	unused?: boolean;
-	macro?: boolean;
-	fun?: boolean;
-	readonly?: boolean;
-	lscope?: boolean;
-	cscope?: boolean;
-	macroarg?: boolean;
-	ordinary?: boolean;
-	should_be_static?: boolean;
-	file_spanning?: boolean;
+	query?: string;
 	name?: string;
+	name_ne?: string;
 	limit?: number;
 	offset?: number;
 }
 
 export interface FunctionFilters {
-	defined?: boolean;
-	filescoped?: boolean;
-	ismacro?: boolean;
-	fanin?: number;
-	max_fanin?: number;
+	query?: string;
+	name?: string;
 	limit?: number;
 	offset?: number;
 }
@@ -255,30 +252,9 @@ export class CScoutClient {
 		return this.get<CScoutIdentifierDetail>(`/identifier?eid=${eid}`);
 	}
 
-	async getFiles(): Promise<CScoutFile[]> {
-		return this.get<CScoutFile[]>('/files');
-	}
-
-	async getWritableFiles(): Promise<CScoutFile[]> {
-		return this.get<CScoutFile[]>('/files/writable');
-	}
-	async getReadonlyFiles(): Promise<CScoutFile[]> {
-		return this.get<CScoutFile[]>('/files/readonly');
-	}
-	async getFilesWithUnused(): Promise<CScoutFile[]> {
-		return this.get<CScoutFile[]>('/files/with-unused');
-	}
-	async getFilesNoStatements(): Promise<CScoutFile[]> {
-		return this.get<CScoutFile[]>('/files/no-statements');
-	}
-	async getFilesUnprocessed(): Promise<CScoutFile[]> {
-		return this.get<CScoutFile[]>('/files/unprocessed');
-	}
-	async getFilesWithStrings(): Promise<CScoutFile[]> {
-		return this.get<CScoutFile[]>('/files/with-strings');
-	}
-	async getFilesHWithIncludes(): Promise<CScoutFile[]> {
-		return this.get<CScoutFile[]>('/files/h-with-includes');
+	async getFiles(query?: string): Promise<CScoutFile[]> {
+		const q = query ? `?query=${query}` : '';
+		return this.get<CScoutFile[]>(`/files${q}`);
 	}
 
 	async getFilemetrics(fid: number): Promise<CScoutFileMetric[]> {
@@ -331,7 +307,7 @@ export class CScoutClient {
 
 	async previewRename(eid: number, newName: string): Promise<CScoutRefactorPreview> {
 		return this.get<CScoutRefactorPreview>(
-			`/refactor/preview?eid=${eid}&newname=${encodeURIComponent(newName)}`
+			`/rename/preview?eid=${eid}&newname=${encodeURIComponent(newName)}`
 		);
 	}
 
@@ -363,13 +339,21 @@ export class CScoutClient {
 		return this.get<CScoutFileDetail>(`/file/detail?fid=${fid}`);
 	}
 
+	async getIdentifierAttributes(): Promise<CScoutAttribute[]> {
+		return this.get<CScoutAttribute[]>('/attributes/identifiers');
+	}
+
+	async getFileAttributes(): Promise<CScoutAttribute[]> {
+		return this.get<CScoutAttribute[]>('/attributes/files');
+	}
+
 	async getProjectFiles(pid: number): Promise<CScoutFile[]> {
 		return this.get<CScoutFile[]>(`/project/files?pid=${pid}`);
 	}
 
 	async applyRename(eid: number, newName: string): Promise<CScoutRefactorApplyResult> {
 		return this.get<CScoutRefactorApplyResult>(
-			`/refactor/apply?eid=${eid}&newname=${encodeURIComponent(newName)}`
+			`/rename/apply?eid=${eid}&newname=${encodeURIComponent(newName)}`
 		);
 	}
 }

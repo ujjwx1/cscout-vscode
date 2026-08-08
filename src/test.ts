@@ -530,7 +530,7 @@ async function runTests() {
     });
 
     await test('GET /api/funcs?callers returns array', async () => {
-        const funs = await client.getFunctions({ defined: true, limit: 100 });
+        const funs = await client.getFunctions({ limit: 100 });
         const withCallers = funs.find(f => f.FANIN > 0);
         assert(withCallers !== undefined, 'No function with callers');
         const callers = await client.getCallers(withCallers!.ID);
@@ -538,7 +538,7 @@ async function runTests() {
     });
 
     await test('GET /api/funcs?callees returns array', async () => {
-        const funs = await client.getFunctions({ defined: true, limit: 100 });
+        const funs = await client.getFunctions({ limit: 100 });
         const withCallees = funs.find(f => f.FANIN > 0);
         assert(withCallees !== undefined, 'No function with callees');
         const callees = await client.getCallees(withCallees!.ID);
@@ -551,7 +551,7 @@ async function runTests() {
     });
 
     await test('GET /api/funmetrics returns metrics', async () => {
-        const funs = await client.getFunctions({ defined: true, limit: 100 });
+        const funs = await client.getFunctions({ limit: 100 });
         const checkdup = funs.find(f => f.NAME === 'checkdup');
         assert(checkdup !== undefined, 'checkdup not found');
         const metrics = await client.getFunmetrics(checkdup!.ID);
