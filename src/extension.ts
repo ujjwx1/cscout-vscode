@@ -18,9 +18,16 @@ import {
 } from './cscoutClient';
 import { CScoutLifecycle, CScoutState } from './lifecycle';
 import { CScoutSettings } from './buildSystem';
-import { toEditorPath, toCScoutPath } from './platform';
+import { toEditorPath, toCScoutPath, checkDependency, commandRunsInWsl } from './platform';
 
 const CSCOUT_KEY_FIRST_ACTIVATION = 'cscout.firstActivationShown';
+
+function getCustomIcon(context: vscode.ExtensionContext, iconName: string) {
+    return {
+        light: vscode.Uri.file(context.asAbsolutePath(`resources/icons/light/${iconName}.svg`)),
+        dark: vscode.Uri.file(context.asAbsolutePath(`resources/icons/dark/${iconName}.svg`))
+    };
+}
 
 // -----------------------------------------------------------------------
 // Settings helpers
@@ -79,7 +86,10 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
     // Root-level counts (for folder labels), fetched once per refresh.
     private counts: Record<string, number> | null = null;
 
-    constructor(private getClient: () => CScoutClient | undefined) { }
+    constructor(
+        private getClient: () => CScoutClient | undefined,
+        private context: vscode.ExtensionContext
+    ) { }
 
     refresh(): void {
         this.groupItems.clear();
@@ -105,18 +115,9 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
 
     /** Map group keys to the right /identifiers filter params for real server pagination. */
     private filtersFor(groupKey: string, offset: number, limit: number): IdentifierFilters {
-        const base: IdentifierFilters = { limit, offset };
-        switch (groupKey) {
-            case 'readonly': return { ...base, readonly: true, macroarg: false };
-            case 'writable': return { ...base, readonly: false, macroarg: false };
-            case 'file-spanning': return { ...base, file_spanning: true };
-            case 'unused-project': return { ...base, unused: true, lscope: true, readonly: false, macroarg: false };
-            case 'unused-file': return { ...base, unused: true, cscope: true, readonly: false, macroarg: false };
-            case 'unused-macros': return { ...base, unused: true, macro: true, readonly: false, macroarg: false };
-            case 'static-vars': return { ...base, should_be_static: true, fun: false };
-            case 'static-funs': return { ...base, should_be_static: true, fun: true };
-            default: return base; // 'all'
-        }
+        return groupKey === 'all' 
+            ? { limit, offset } 
+            : { query: groupKey.replace(/-/g, '_'), limit, offset };
     }
 
     getTreeItem(node: Node): vscode.TreeItem {
@@ -131,7 +132,23 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
         }
         if (node.kind === 'group') {
             const label = node.count !== undefined ? `${node.label} (${node.count})` : node.label;
-            return new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+            const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+
+            const iconMap: Record<string, string> = {
+                'all': 'format-list-bulleted',
+                'readonly': 'lock-outline',
+                'writable': 'pencil-outline',
+                'file-spanning': 'file-link-outline',
+                'unused-project': 'archive-outline',
+                'unused-file': 'file-hidden',
+                'unused-macros': 'code-tags-off',
+                'static-vars': 'variable-box',
+                'static-funs': 'function-variant'
+            };
+            const iconName = iconMap[node.groupKey] ?? 'format-list-bulleted';
+            item.iconPath = getCustomIcon(this.context, iconName);
+
+            return item;
         }
         if (node.kind === 'load-more') {
             const remaining = node.total - node.offset;
@@ -299,7 +316,10 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
     private groupTotals: Map<string, number> = new Map();
     private counts: Record<string, number> | null = null;
 
-    constructor(private getClient: () => CScoutClient | undefined) { }
+    constructor(
+        private getClient: () => CScoutClient | undefined,
+        private context: vscode.ExtensionContext
+    ) { }
 
     refresh(): void {
         this.groupItems.clear();
@@ -327,17 +347,9 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
     private async fetchPage(client: CScoutClient, groupKey: string, offset: number, limit: number): Promise<CScoutFile[]> {
         // Files endpoints don't support pagination yet — fetch all and slice.
         // This is acceptable since file lists are much smaller than identifier lists.
-        switch (groupKey) {
-            case 'all': return (await client.getFiles()).slice(offset, offset + limit);
-            case 'readonly': return (await client.getReadonlyFiles()).slice(offset, offset + limit);
-            case 'writable': return (await client.getWritableFiles()).slice(offset, offset + limit);
-            case 'with-unused': return (await client.getFilesWithUnused()).slice(offset, offset + limit);
-            case 'no-statements': return (await client.getFilesNoStatements()).slice(offset, offset + limit);
-            case 'unprocessed': return (await client.getFilesUnprocessed()).slice(offset, offset + limit);
-            case 'with-strings': return (await client.getFilesWithStrings()).slice(offset, offset + limit);
-            case 'h-with-includes': return (await client.getFilesHWithIncludes()).slice(offset, offset + limit);
-            default: return [];
-        }
+        const query = groupKey === 'all' ? undefined : groupKey.replace(/-/g, '_');
+        const allFiles = await client.getFiles(query);
+        return allFiles.slice(offset, offset + limit);
     }
 
     getTreeItem(node: Node): vscode.TreeItem {
@@ -355,7 +367,20 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
                 `${node.label} (${node.count ?? 0})`,
                 vscode.TreeItemCollapsibleState.Collapsed
             );
-            item.iconPath = new vscode.ThemeIcon('folder');
+
+            const iconMap: Record<string, string> = {
+                'all': 'folder-multiple-outline',
+                'readonly': 'folder-lock-outline',
+                'writable': 'folder-edit-outline',
+                'with-unused': 'folder-alert-outline',
+                'no-statements': 'folder-outline',
+                'unprocessed': 'folder-sync-outline',
+                'with-strings': 'folder-text-outline',
+                'h-with-includes': 'folder-pound-outline'
+            };
+            const iconName = iconMap[node.groupKey] ?? 'folder-outline';
+            item.iconPath = getCustomIcon(this.context, iconName);
+
             return item;
         }
         if (node.kind === 'load-more') {
@@ -374,10 +399,11 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
         const file = node.file;
         const uri = vscode.Uri.file(toEditorPath(file.NAME));
         const item = new vscode.TreeItem(uri, vscode.TreeItemCollapsibleState.None);
+        item.iconPath = new vscode.ThemeIcon('file-code');
 
-        const rwText = file.RO ? '🔒 read-only' : 'writable';
+        const rwText = file.RO ? '$(lock) read-only' : '$(edit) writable';
         const complexity = (file as any).COMPLEXITY || 0;
-        item.description = `${rwText}${complexity ? `  ·  complexity ${complexity}` : ''}`;
+        item.description = `${rwText}${complexity ? `  $(pulse) ${complexity}` : ''}`;
 
         item.tooltip = `${file.NAME}\nStatus: ${file.RO ? 'read-only' : 'writable'}`;
         item.command = {
@@ -459,7 +485,10 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
     private groupTotals: Map<string, number> = new Map();
     private counts: Record<string, number> | null = null;
 
-    constructor(private getClient: () => CScoutClient | undefined) { }
+    constructor(
+        private getClient: () => CScoutClient | undefined,
+        private context: vscode.ExtensionContext
+    ) { }
 
     refresh(): void {
         this.groupItems.clear();
@@ -484,14 +513,9 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
     }
 
     private filtersFor(groupKey: string, offset: number, limit: number): FunctionFilters {
-        const base: FunctionFilters = { defined: true, limit, offset };
-        switch (groupKey) {
-            case 'project-scoped': return { ...base, filescoped: false, ismacro: false };
-            case 'file-scoped': return { ...base, filescoped: true, ismacro: false };
-            case 'not-called': return { ...base, fanin: 0, ismacro: false };
-            case 'called-once': return { ...base, fanin: 1, ismacro: false };
-            default: return base; // 'all'
-        }
+        return groupKey === 'all' 
+            ? { limit, offset } 
+            : { query: groupKey.replace(/-/g, '_'), limit, offset };
     }
 
     getTreeItem(node: Node): vscode.TreeItem {
@@ -506,7 +530,19 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
         }
         if (node.kind === 'group') {
             const label = node.count !== undefined ? `${node.label} (${node.count})` : node.label;
-            return new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+            const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+
+            const iconMap: Record<string, string> = {
+                'all': 'bookshelf',
+                'project-scoped': 'earth',
+                'file-scoped': 'file-outline',
+                'not-called': 'phone-missed',
+                'called-once': 'numeric-1-box-outline'
+            };
+            const iconName = iconMap[node.groupKey] ?? 'bookshelf';
+            item.iconPath = getCustomIcon(this.context, iconName);
+
+            return item;
         }
         if (node.kind === 'load-more') {
             const remaining = node.total - node.offset;
@@ -523,8 +559,15 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
         }
         const fn = node.fn;
         const item = new vscode.TreeItem(fn.NAME, vscode.TreeItemCollapsibleState.None);
-        item.description = `in:${fn.FANIN} out:${fn.FANOUT ?? 0} cx:${fn.CCYCL1 ?? '?'}`;
         item.iconPath = new vscode.ThemeIcon(fn.ISMACRO ? 'symbol-constant' : 'symbol-function');
+
+        const tooltip = new vscode.MarkdownString();
+        tooltip.supportThemeIcons = true;
+        tooltip.appendMarkdown(`**${fn.NAME}**\n\n`);
+        tooltip.appendMarkdown(`$(sign-in) **Fan-in:** ${fn.FANIN} (Incoming)\n\n`);
+        tooltip.appendMarkdown(`$(sign-out) **Fan-out:** ${fn.FANOUT ?? 0} (Outgoing)\n\n`);
+        tooltip.appendMarkdown(`$(pulse) **Complexity:** ${fn.CCYCL1 ?? '?'}`);
+        item.tooltip = tooltip;
         item.command = {
             command: 'cscout.showCallGraph',
             arguments: [fn.ID, true],
@@ -591,18 +634,51 @@ class FileDepsTreeProvider implements vscode.TreeDataProvider<Node> {
     private _emitter = new vscode.EventEmitter<Node | undefined | void>();
     readonly onDidChangeTreeData = this._emitter.event;
 
-    constructor(private getClient: () => CScoutClient | undefined) { }
+    constructor(
+        private getClient: () => CScoutClient | undefined,
+        private context?: vscode.ExtensionContext
+    ) { }
 
     refresh(): void { this._emitter.fire(); }
 
     getTreeItem(node: Node): vscode.TreeItem {
         if (node.kind === 'group') {
-            return new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Collapsed);
+            const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Collapsed);
+
+            // Graph-centric icons combining graph structure with domain concept
+            switch (node.groupKey) {
+                case 'include':
+                    // File include graph (original project/file-structure graph icon)
+                    item.iconPath = new vscode.ThemeIcon('project');
+                    break;
+                case 'compile':
+                    // Compile-time dependency graph (circuit-board network graph)
+                    item.iconPath = new vscode.ThemeIcon('circuit-board');
+                    break;
+                case 'control':
+                    // Control flow dependency graph (custom control-flow graph node icon)
+                    item.iconPath = this.context
+                        ? getCustomIcon(this.context, 'control-graph')
+                        : new vscode.ThemeIcon('graph');
+                    break;
+                case 'data':
+                    // Data dependency graph (global variable reference flow graph)
+                    item.iconPath = new vscode.ThemeIcon('references');
+                    break;
+                default:
+                    item.iconPath = new vscode.ThemeIcon('project');
+            }
+            return item;
         }
         if (node.kind === 'action') {
             const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.None);
             item.command = { command: node.command, title: node.label, arguments: node.args };
-            item.iconPath = new vscode.ThemeIcon('type-hierarchy');
+
+            if (node.label.toLowerCase().includes('writable')) {
+                item.iconPath = new vscode.ThemeIcon('edit');
+            } else {
+                item.iconPath = new vscode.ThemeIcon('files');
+            }
             return item;
         }
         if (node.kind === 'empty') {
@@ -639,18 +715,37 @@ class FileDepsTreeProvider implements vscode.TreeDataProvider<Node> {
 // -----------------------------------------------------------------------
 
 function describeIdKind(id: CScoutIdentifier): string {
-    const prefix = id.READONLY ? 'library ' : '';
-    if (id.MACRO && id.FUNMACRO) return prefix + 'Function-like macro';
-    if (id.MACRO) return prefix + 'Macro';
-    if (id.FUN) return prefix + 'Function';
-    if (id.TYPEDEF) return prefix + 'Typedef';
-    if (id.SUETAG) return prefix + 'Tag for struct/union/enum';
-    if (id.SUMEMBER) return prefix + 'Member of struct/union';
-    if (id.ENUM) return prefix + 'Enumeration constant';
-    if (id.LABEL) return prefix + 'Label';
-    if (id.YACC) return prefix + 'Yacc identifier';
-    if (id.ORDINARY) return prefix + 'Ordinary identifier';
-    return prefix + 'Identifier';
+    const attributes: string[] = [];
+
+    // 1. Core Type (Most important)
+    if (id.FUN) attributes.push('Function');
+    if (id.MACRO) attributes.push('Macro');
+    if (id.TYPEDEF) attributes.push('Typedef');
+    if (id.ENUM) attributes.push('Enumeration constant');
+    if (id.SUETAG) attributes.push('Tag for struct/union/enum');
+    if (id.SUMEMBER) attributes.push('Member of struct/union');
+    if (id.LABEL) attributes.push('Label');
+    if (id.MACROARG) attributes.push('Macro argument');
+
+    // 2. Scope
+    // Note: CScout treats scope (CSCOPE/LSCOPE) as a core identifier attribute/kind.
+    // We comment it out here to prevent duplicating the information in the UI,
+    // since we display the scope in its own dedicated "Scope:" line in the hover.
+    // if (id.CSCOPE) attributes.push('File scope');
+    // if (id.LSCOPE) attributes.push('Project scope');
+
+    // 3. Modifiers
+    if (id.READONLY) attributes.push('Read-only');
+    if (id.UNDEFMACRO) attributes.push('Undefined macro');
+    if (id.UNDEFEDMACRO) attributes.push('Undefed macro');
+    if (id.REDEFEDSAMEMACRO) attributes.push('Macro redefined with same value');
+    if (id.REDEFEDDIFFMACRO) attributes.push('Macro redefined with different value');
+
+    // 4. Low-priority internal classifications
+    if (id.ORDINARY) attributes.push('Ordinary identifier');
+    if (id.YACC) attributes.push('Yacc identifier');
+
+    return attributes.length > 0 ? attributes.join(', ') : 'Unknown identifier';
 }
 
 function iconForId(id: CScoutIdentifier): vscode.ThemeIcon {
@@ -681,6 +776,45 @@ async function resolveLnum(client: CScoutClient, fileOrFid: string | number, fof
     } catch {
         return null;
     }
+}
+
+async function resolveExactIdentifierAtCursor(
+    client: CScoutClient,
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    name: string,
+    token?: vscode.CancellationToken
+): Promise<CScoutIdentifier | undefined> {
+    if (token?.isCancellationRequested) return undefined;
+    const results = await client.getIdentifiers({ name, limit: 1000 });
+    const matching = results.filter((r) => r.NAME === name);
+
+    if (matching.length === 0) return undefined;
+    if (matching.length === 1) return matching[0];
+
+    const targetLine = position.line + 1;
+    const targetFsPath = document.uri.fsPath.toLowerCase();
+
+    let fileMatch: CScoutIdentifier | undefined;
+
+    for (const r of matching) {
+        if (token?.isCancellationRequested) return undefined;
+        const detail = await client.getIdentifier(r.EID).catch(() => null);
+        if (detail) {
+            for (const loc of detail.locations) {
+                const locFsPath = vscode.Uri.file(toEditorPath(loc.FILE)).fsPath.toLowerCase();
+                if (locFsPath === targetFsPath) {
+                    if (loc.LNUM === targetLine) {
+                        return r; // exact match
+                    }
+                    if (!fileMatch) {
+                        fileMatch = r; // save first match in same file as fallback
+                    }
+                }
+            }
+        }
+    }
+    return fileMatch || matching[0]; // fallback to same file, then any match
 }
 
 function isInsideCommentOrString(document: vscode.TextDocument, position: vscode.Position): boolean {
@@ -757,6 +891,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
         position: vscode.Position,
         token: vscode.CancellationToken
     ): Promise<vscode.Hover | undefined> {
+        if (token.isCancellationRequested) return undefined;
         if (isInsideCommentOrString(document, position)) return;
         const client = this.getClient();
         if (!client) return;
@@ -764,10 +899,8 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
         if (!range) return;
         const name = document.getText(range);
         try {
-            const results = await client.getIdentifiers({ name, limit: 5 });
-            if (token.isCancellationRequested) return; // User moved away
-            const exact = results.find((r) => r.NAME === name);
-            if (!exact) return;
+            const exact = await resolveExactIdentifierAtCursor(client, document, position, name, token);
+            if (token.isCancellationRequested || !exact) return;
             const md = new vscode.MarkdownString(undefined, true);
             md.isTrusted = true;
 
@@ -776,7 +909,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
             md.appendMarkdown(`**Kind:** ${describeIdKind(exact)}  \n`);
 
             // Scope
-            const scope = exact.LSCOPE ? 'project (linkage)' : exact.CSCOPE ? 'file (static)' : 'local';
+            const scope = exact.LSCOPE ? 'Global (visible across the entire project)' : exact.CSCOPE ? 'Static (visible only in this file)' : 'Local (inside a function/block)';
             md.appendMarkdown(`**Scope:** ${scope}  \n`);
 
             // For functions: fetch complexity for THIS function only (not all 10k functions).
@@ -836,8 +969,7 @@ class CScoutDefinitionProvider implements vscode.DefinitionProvider {
         if (!range) return;
         const name = document.getText(range);
         try {
-            const results = await client.getIdentifiers({ name, limit: 5 });
-            const exact = results.find((r) => r.NAME === name);
+            const exact = await resolveExactIdentifierAtCursor(client, document, position, name);
             if (!exact) return;
             const files = await client.getFiles().catch(() => []);
             const roMap = new Map(files.map(f => [f.FID, f.RO]));
@@ -889,8 +1021,7 @@ class CScoutReferenceProvider implements vscode.ReferenceProvider {
         if (!range) return;
         const name = document.getText(range);
         try {
-            const results = await client.getIdentifiers({ name, limit: 5 });
-            const exact = results.find((r) => r.NAME === name);
+            const exact = await resolveExactIdentifierAtCursor(client, document, position, name);
             if (!exact) return;
             const detail = await client.getIdentifier(exact.EID);
             return detail.locations.filter((l) => l.LNUM !== null).map(locationToVSCode);
@@ -919,38 +1050,88 @@ class CScoutRenameProvider implements vscode.RenameProvider {
         const range = document.getWordRangeAtPosition(position, /[A-Za-z0-9_]+/) || document.getWordRangeAtPosition(position);
         if (!range) return;
         const oldName = document.getText(range);
+
         try {
-            const results = await client.getIdentifiers({ name: oldName, limit: 5 });
-            const exact = results.find((r) => r.NAME === oldName);
-            if (!exact) return;
+            const exact = await resolveExactIdentifierAtCursor(client, document, position, oldName);
+            if (!exact) {
+                vscode.window.showErrorMessage(`[CScout Debug] Could not find '${oldName}' in DB!`);
+                return;
+            }
 
             const preview = await client.previewRename(exact.EID, newName);
-            if (!preview.locations || preview.locations.length === 0) return;
+            if (!preview.locations || preview.locations.length === 0) {
+                vscode.window.showErrorMessage(`[CScout Debug] Preview returned 0 locations!`);
+                return;
+            }
 
             const edit = new vscode.WorkspaceEdit();
             for (const loc of preview.locations) {
-                if (loc.LNUM === null) continue;
-                const uri = vscode.Uri.file(toEditorPath(loc.FILE));
-                const line = loc.LNUM - 1;
-                let char: number;
-                if (loc.LINE_START_OFFSET !== undefined && loc.LINE_START_OFFSET !== null) {
-                    char = Math.max(0, loc.FOFFSET - loc.LINE_START_OFFSET);
+                if (loc.LNUM === null) {
+                    continue;
+                }
+
+                // Fix Windows URI casing mismatch
+                let uri = vscode.Uri.file(toEditorPath(loc.FILE));
+                const lowerFsPath = uri.fsPath.toLowerCase();
+                if (document.uri.fsPath.toLowerCase() === lowerFsPath) {
+                    uri = document.uri; // Use the exact same URI as the open document
                 } else {
-                    try {
-                        const doc = await vscode.workspace.openTextDocument(uri);
-                        const lineText = doc.lineAt(line).text;
-                        char = lineText.indexOf(oldName);
-                        if (char < 0) continue;
-                    } catch {
-                        continue;
+                    for (const doc of vscode.workspace.textDocuments) {
+                        if (doc.uri.fsPath.toLowerCase() === lowerFsPath) {
+                            uri = doc.uri;
+                            break;
+                        }
                     }
                 }
-                const locRange = new vscode.Range(line, char, line, char + oldName.length);
-                edit.replace(uri, locRange, newName);
+
+                const line = loc.LNUM - 1;
+                let char: number;
+
+                // Fix: CScout runs on WSL/Linux and counts \r\n as 2 bytes.
+                // VS Code on Windows normalizes to \n-only, so positionAt()
+                // expects an offset that doesn't count \r chars.
+                // For a token on LNUM (1-based), there are (LNUM-1) \r bytes
+                // that CScout counted but VS Code doesn't → subtract them.
+                try {
+                    const openDoc = document.uri.fsPath.toLowerCase() === uri.fsPath.toLowerCase()
+                        ? document
+                        : await vscode.workspace.openTextDocument(uri);
+
+                    const crlfAdjust = openDoc.eol === vscode.EndOfLine.CRLF ? (loc.LNUM - 1) : 0;
+                    const adjustedOffset = loc.FOFFSET - crlfAdjust;
+                    const posFromOffset = openDoc.positionAt(adjustedOffset);
+                    const textAtOffset = openDoc.getText(new vscode.Range(posFromOffset, posFromOffset.translate(0, oldName.length)));
+
+                    const line0 = Math.max(0, loc.LNUM - 1);
+                    let char: number;
+                    if (textAtOffset === oldName) {
+                        char = posFromOffset.character;
+                    } else {
+                        // Fallback: scan the line for the name
+                        const lineText = openDoc.lineAt(line0).text;
+                        char = lineText.indexOf(oldName);
+                        if (char < 0) {
+                            vscode.window.showErrorMessage(`[CScout Debug] Cannot locate '${oldName}' on line ${loc.LNUM}: positionAt gave '${textAtOffset}', line='${lineText.trim()}'`);
+                            continue;
+                        }
+                    }
+
+                    const locRange = new vscode.Range(line0, char, line0, char + oldName.length);
+                    edit.replace(uri, locRange, newName);
+                } catch (e) {
+                    vscode.window.showErrorMessage(`[CScout Debug] Error processing loc: ${(e as Error).message}`);
+                    continue;
+                }
+
+            }
+            if (edit.size === 0) {
+                vscode.window.showErrorMessage(`[CScout Debug] WorkspaceEdit is EMPTY! All locations were skipped.`);
+            } else if (preview.locations.length > 1) {
+                vscode.window.showInformationMessage(`[CScout Debug] Built WorkspaceEdit with ${edit.size} edits.`);
             }
             return edit;
         } catch (err) {
-            vscode.window.showErrorMessage(`CScout rename failed: ${(err as Error).message}`);
+            vscode.window.showErrorMessage(`[CScout Debug] Exception: ${(err as Error).message}`);
             return;
         }
     }
@@ -1019,8 +1200,8 @@ async function refreshDiagnostics(
     diagnostics.clear();
     try {
         const [unused, shouldStatic] = await Promise.all([
-            client.getIdentifiers({ unused: true, limit: 5000 }),
-            client.getIdentifiers({ should_be_static: true, limit: 5000 })
+            client.getIdentifiers({ query: 'unused', limit: 5000 }),
+            client.getIdentifiers({ query: 'should_be_static', limit: 5000 })
         ]);
 
         const byFile = new Map<string, vscode.Diagnostic[]>();
@@ -1102,7 +1283,8 @@ export class CScoutCodeLensProvider implements vscode.CodeLensProvider {
         this._emitter.fire();
     }
 
-    async provideCodeLenses(document: vscode.TextDocument): Promise<vscode.CodeLens[]> {
+    async provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.CodeLens[]> {
+        if (token.isCancellationRequested) return [];
         const client = this.getClient();
         if (!client) return [];
 
@@ -1198,6 +1380,16 @@ export function activate(context: vscode.ExtensionContext): void {
             const client = lifecycle.getClient();
             if (client) {
                 await refreshDiagnostics(client, diagnostics);
+                try {
+                    const [fileAttrs, idAttrs] = await Promise.all([
+                        client.getFileAttributes(),
+                        client.getIdentifierAttributes(),
+                    ]);
+                    metricDescriptions = Object.fromEntries(fileAttrs.map(a => [a.id, a.name]));
+                    identifierAttributes = idAttrs;
+                } catch {
+                    // Non-fatal: fall back to static METRIC_DESCRIPTIONS
+                }
             }
         },
         onError: (message) => {
@@ -1247,10 +1439,10 @@ export function activate(context: vscode.ExtensionContext): void {
     fileSystemWatcher.onDidCreate(handleFileChange);
     fileSystemWatcher.onDidDelete(handleFileChange);
 
-    const identifierProvider = new IdentifierTreeProvider(() => lifecycle.getClient());
-    const fileProvider = new FileTreeProvider(() => lifecycle.getClient());
-    const functionProvider = new FunctionTreeProvider(() => lifecycle.getClient());
-    const fileDepsProvider = new FileDepsTreeProvider(() => lifecycle.getClient());
+    const identifierProvider = new IdentifierTreeProvider(() => lifecycle.getClient(), context);
+    const fileProvider = new FileTreeProvider(() => lifecycle.getClient(), context);
+    const functionProvider = new FunctionTreeProvider(() => lifecycle.getClient(), context);
+    const fileDepsProvider = new FileDepsTreeProvider(() => lifecycle.getClient(), context);
     const actionProvider = new ActionTreeProvider();
     actionProvider.setState(currentState);
 
@@ -1417,7 +1609,7 @@ export function activate(context: vscode.ExtensionContext): void {
             const client = lifecycle.getClient();
             if (!client) return;
             const metrics = await client.getFunmetricsAggregate();
-            const fns = await client.getFunctions({ defined: true, limit: 10000 });
+            const fns = await client.getFunctions({ limit: 10000 });
             showFunMetricsAggregatePanel(context, metrics, fns);
         }),
         vscode.commands.registerCommand('cscout.inspectFile', async (nodeOrFid?: any) => {
@@ -1560,7 +1752,7 @@ async function promptForFunctionEid(client: CScoutClient): Promise<number | unde
         placeHolder: 'e.g. main',
     });
     if (!name) return undefined;
-    const results = await client.getIdentifiers({ name, fun: true, limit: 20 });
+    const results = await client.getIdentifiers({ name, query: 'functions', limit: 20 });
     if (results.length === 0) {
         vscode.window.showInformationMessage(`No function named "${name}" found.`);
         return undefined;
@@ -1600,7 +1792,21 @@ function makeGraphInteractive(html: string): string {
             }
             svg > polygon:first-child,
             svg > rect:first-child { fill: transparent !important; }
-            body { background: var(--vscode-editor-background); }
+            body { background: var(--vscode-editor-background); color: var(--vscode-editor-foreground); }
+            
+            /* Theme-adaptive edges, arrowheads, and labels for Light & Dark VS Code themes */
+            .edge path {
+                stroke: var(--vscode-editor-foreground) !important;
+                opacity: 0.85;
+            }
+            .edge polygon {
+                stroke: var(--vscode-editor-foreground) !important;
+                fill: var(--vscode-editor-foreground) !important;
+                opacity: 0.85;
+            }
+            .edge text {
+                fill: var(--vscode-editor-foreground) !important;
+            }
         </style>`)
         .replace('</body>', `
         <script>
@@ -1685,6 +1891,13 @@ async function showCallGraph(
         fnid = fn.ID;
     }
 
+    try {
+        const pythonPath = vscode.workspace.getConfiguration('cscout').get<string>('pythonPath', 'python3');
+        await checkDependency('dot', 'dot not found', commandRunsInWsl(pythonPath));
+    } catch {
+        vscode.window.showWarningMessage('Graphviz (dot) was not found in your system PATH. Call graph generation may fail or display empty. Please install Graphviz.');
+    }
+
     const panel = vscode.window.createWebviewPanel(
         'cscoutCallGraph',
         `Call graph: ${fnName}`,
@@ -1721,6 +1934,13 @@ async function showIncludeGraph(
     client: CScoutClient,
     writableOnly: boolean = true
 ): Promise<void> {
+    try {
+        const pythonPath = vscode.workspace.getConfiguration('cscout').get<string>('pythonPath', 'python3');
+        await checkDependency('dot', 'dot not found', commandRunsInWsl(pythonPath));
+    } catch {
+        vscode.window.showWarningMessage('Graphviz (dot) was not found in your system PATH. Include graph generation may fail or display empty. Please install Graphviz.');
+    }
+
     const panel = vscode.window.createWebviewPanel(
         'cscoutIncludeGraph',
         writableOnly ? 'Include graph (writable files)' : 'Include graph (all files)',
@@ -1804,6 +2024,17 @@ async function showInspect(
     } catch (err) {
         panel.webview.html = `<!doctype html><html><body style="font-family:sans-serif;padding:2em"><p>Error loading inspect data: ${escapeHtml(String(err))}</p></body></html>`;
     }
+}
+
+// Attribute and metric metadata fetched from the API on connect.
+// Keys are DB column names (e.g. "NCHAR"), values are display names.
+let metricDescriptions: Record<string, string> = {};
+let identifierAttributes: { id: string; name: string }[] = [];
+
+function getMetricDescriptions(): Record<string, string> {
+    return Object.keys(metricDescriptions).length > 0
+        ? metricDescriptions
+        : METRIC_DESCRIPTIONS;
 }
 
 const METRIC_DESCRIPTIONS: Record<string, string> = {
@@ -1902,8 +2133,8 @@ function renderInspectHtml(detail: import('./cscoutClient').CScoutIdentifierDeta
     attrs.push(
         ['Can be replaced by C constant', bool(id.DEFCCONSTVAL || id.EXPCCONSTVAL)],
         ['Value defined as C compile-time constant', bool(id.DEFCCONSTVAL)],
-        ['Value expanded as C compile-time constant', bool(id.EXPCCONSTVAL)],
-    ];
+        ['Value expanded as C compile-time constant', bool(id.EXPCCONSTVAL)]
+    );
 
     const attrsHtml = attrs
         .map(([k, v]) => `<tr><td>${escapeHtml(String(k))}</td><td>${v}</td></tr>`)
@@ -2298,8 +2529,9 @@ th { color: var(--vscode-descriptionForeground); font-size: .9em; }
 <tr><td><code>cscout</code></td><td>C analysis engine</td><td><a href="https://github.com/dspinellis/cscout">Build from source</a></td></tr>
 <tr><td><code>python3</code></td><td>Runs csapi.py REST server</td><td>System package manager</td></tr>
 <tr><td><code>sqlite3</code></td><td>Stores analysis database</td><td>System package manager</td></tr>
+<tr><td><code>dot</code> <span style="color:var(--vscode-descriptionForeground);">(Optional)</span></td><td>Generates Call & Include graphs</td><td>System package manager (<code>graphviz</code>)</td></tr>
 </table>
-<p>On Ubuntu/Debian: <code>sudo apt install python3 sqlite3</code></p>
+<p>On Ubuntu/Debian: <code>sudo apt install python3 sqlite3 graphviz</code></p>
 </div>
 
 <div class="step">
@@ -2307,7 +2539,7 @@ th { color: var(--vscode-descriptionForeground); font-size: .9em; }
 <h2>Set Up Extension Settings</h2>
 <p>Tell the extension where to find the CScout tools:</p>
 <pre><code># In VS Code settings (cscout.*):
-cscout.binaryPath     — path to the cscout binary
+cscout.binaryPath     — path to the CScout binary
 cscout.cscocoPyPath   — path to cscoco.py (for CMake/Meson projects)
 cscout.csapiPyPath    — path to csapi.py (REST server)
 cscout.csmakePath     — path to csmake (for Makefile projects)</code></pre>
