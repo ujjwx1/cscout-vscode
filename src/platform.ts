@@ -13,6 +13,9 @@
 
 import * as cp from 'child_process';
 import * as os from 'os';
+import * as util from 'util';
+
+const execAsync = util.promisify(cp.exec);
 
 export type Platform = 'linux' | 'darwin' | 'win32-wsl' | 'win32-native' | 'cygwin';
 
@@ -261,4 +264,81 @@ export function describeEnvironment(): string {
 	const platform = detectPlatform();
 	const wsl = platform === 'win32-native' ? isWslAvailable() : false;
 	return `Platform: ${platform}${wsl ? ' (WSL available)' : ''} | Node ${process.version} | ${os.arch()}`;
+}
+
+/*
+ * Resolve a python script path relative to the installed cscout binary,
+ * unless it is already an absolute path. Prevents relative paths from
+ * incorrectly resolving against the workspace root.
+ */
+export async function resolveScriptPath(scriptPath: string, cscoutBinPath: string, commandRunsInWsl: boolean): Promise<string> {
+	if (!scriptPath) return scriptPath;
+
+	// 1. If the script path is absolute, return it as-is.
+	if (scriptPath.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(scriptPath)) {
+		return scriptPath;
+	}
+
+	// 2. We need to resolve relative to the cscout binary.
+	let absoluteCscoutBin = cscoutBinPath;
+	if (!absoluteCscoutBin.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(absoluteCscoutBin)) {
+		// It's a bare command like 'cscout'. Find it dynamically.
+		try {
+			if (commandRunsInWsl) {
+				const { stdout } = await execAsync(`wsl.exe -e which ${cscoutBinPath}`);
+				absoluteCscoutBin = stdout.trim();
+			} else if (detectPlatform() === 'win32-native') {
+				const { stdout } = await execAsync(`where.exe ${cscoutBinPath}`);
+				absoluteCscoutBin = stdout.split('\r\n')[0].trim();
+			} else {
+				const { stdout } = await execAsync(`which ${cscoutBinPath}`);
+				absoluteCscoutBin = stdout.trim();
+			}
+		} catch {
+			return scriptPath;
+		}
+	}
+
+	// 3. Resolve the script relative to the cscout binary's directory
+	if (absoluteCscoutBin) {
+		const separator = absoluteCscoutBin.includes('/') ? '/' : '\\';
+		const dir = absoluteCscoutBin.substring(0, absoluteCscoutBin.lastIndexOf(separator));
+		
+		// Note: We currently assume Python scripts (cscoco.py, csapi.py) are installed 
+		// as siblings to the main cscout binary (e.g., both in /usr/local/bin).
+		// If a user runs 'make install' in the future and csapi.py is moved to 
+		// /usr/local/share/cscout/, this assumption will break.
+		return `${dir}${separator}${scriptPath}`;
+	}
+
+	return scriptPath;
+}
+
+/*
+ * Check if a required dependency exists in the system PATH (or as an absolute path).
+ * Throws a friendly error message if it doesn't exist, which bubbles up to the UI.
+ */
+export async function checkDependency(command: string, friendlyMessage: string, commandRunsInWsl: boolean): Promise<void> {
+	if (!command) return;
+
+	try {
+		if (command.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(command)) {
+			// Absolute path: check if it exists using standard fs
+			const fs = require('fs');
+			if (!fs.existsSync(command)) {
+				throw new Error();
+			}
+			return;
+		}
+
+		if (commandRunsInWsl) {
+			await execAsync(`wsl.exe -e which ${command}`);
+		} else if (detectPlatform() === 'win32-native') {
+			await execAsync(`where.exe ${command}`);
+		} else {
+			await execAsync(`which ${command}`);
+		}
+	} catch {
+		throw new Error(friendlyMessage);
+	}
 }

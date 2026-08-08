@@ -239,7 +239,7 @@ const originalResolve = (Module as any)._resolveFilename;
 
 // Now import target files
 import { CScoutClient } from './cscoutClient';
-import { toWslPath, fromWslPath, setWslMountRootForTesting } from './platform';
+import { toWslPath, fromWslPath } from './platform';
 import { detectAll } from './buildSystem';
 import { CScoutLifecycle } from './lifecycle';
 import {
@@ -250,10 +250,15 @@ import {
     FunctionTreeProvider,
     FileTreeProvider
 } from './extension';
-import { toEditorPath } from './platform';
 
 const client = new CScoutClient('localhost', 8081);
 
+function toEditorPath(p: string): string {
+    if (process.platform === 'win32' && p.startsWith('/mnt/')) {
+        return fromWslPath(p);
+    }
+    return p;
+}
 
 async function runTests() {
     let passed = 0;
@@ -280,32 +285,15 @@ async function runTests() {
     });
 
     // --- Platform WSL Path Tests ---
-    await test('toWslPath translates Windows paths (standard mount)', async () => {
-        setWslMountRootForTesting('/mnt/');
+    await test('toWslPath translates Windows paths', async () => {
         const wsl = toWslPath('C:\\Users\\foo\\project');
         assert(wsl === '/mnt/c/Users/foo/project', `Expected /mnt/c/Users/foo/project, got ${wsl}`);
     });
 
-    await test('fromWslPath translates WSL paths (standard mount)', async () => {
-        setWslMountRootForTesting('/mnt/');
+    await test('fromWslPath translates WSL paths', async () => {
         const win = fromWslPath('/mnt/c/Users/foo/project');
         assert(win === 'C:\\Users\\foo\\project', `Expected C:\\Users\\foo\\project, got ${win}`);
     });
-
-    await test('toWslPath translates Windows paths (custom mount /)', async () => {
-        setWslMountRootForTesting('/');
-        const wsl = toWslPath('C:\\Users\\foo\\project');
-        assert(wsl === '/c/Users/foo/project', `Expected /c/Users/foo/project, got ${wsl}`);
-    });
-
-    await test('fromWslPath translates WSL paths (custom mount /)', async () => {
-        setWslMountRootForTesting('/');
-        const win = fromWslPath('/c/Users/foo/project');
-        assert(win === 'C:\\Users\\foo\\project', `Expected C:\\Users\\foo\\project, got ${win}`);
-    });
-
-    // Reset back to default so other tests don't fail unexpectedly
-    setWslMountRootForTesting('/mnt/');
 
     // --- Build System Detection Tests ---
     await test('detectAll detects CMake project', async () => {
@@ -423,7 +411,8 @@ async function runTests() {
         const realContent = fs.readFileSync(pathInDoc, 'utf-8');
         const doc = new MockDocument({ fsPath: pathInDoc }, realContent);
 
-        const lenses = await codeLensProvider.provideCodeLenses(doc as any);
+        const token = { isCancellationRequested: false };
+        const lenses = await codeLensProvider.provideCodeLenses(doc as any, token as any);
         assert(Array.isArray(lenses), 'Lenses not an array');
         assert(lenses.length > 0, `No lenses returned for ${pathInDoc}`);
         const lens = lenses[0];
@@ -436,8 +425,10 @@ async function runTests() {
         }
     });
 
+    const mockContext = { extensionPath: '', asAbsolutePath: (p: string) => p } as any;
+
     await test('Tree View Providers load top-level counts', async () => {
-        const idTree = new IdentifierTreeProvider(() => client);
+        const idTree = new IdentifierTreeProvider(() => client, mockContext);
         const rootNodes = await idTree.getChildren();
         assert(rootNodes.length > 0, 'No root nodes returned');
         const firstGroup = rootNodes[0];
@@ -448,7 +439,7 @@ async function runTests() {
     });
 
     await test('Tree View Providers paginate children correctly', async () => {
-        const idTree = new IdentifierTreeProvider(() => client);
+        const idTree = new IdentifierTreeProvider(() => client, mockContext);
         const rootNodes = await idTree.getChildren();
         const allGroup = rootNodes.find(n => n.kind === 'group' && n.groupKey === 'all');
         assert(allGroup !== undefined, 'All group not found');

@@ -24,6 +24,7 @@ import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
+import * as util from 'util';
 import * as vscode from 'vscode';
 import { CScoutClient } from './cscoutClient';
 import { BuildResult, CScoutSettings, generateCsFile } from './buildSystem';
@@ -32,6 +33,8 @@ import {
 	describeEnvironment,
 	pathForCommand,
 	resolveCommand,
+	resolveScriptPath,
+	checkDependency,
 } from './platform';
 
 export type CScoutState = 'stopped' | 'analyzing' | 'indexing' | 'ready' | 'error';
@@ -81,7 +84,7 @@ export class CScoutLifecycle {
 	 * Start the whole pipeline.  Wrapped in withProgress so the user
 	 * sees a proper progress notification with a spinner.
 	 */
-	async start(workspaceRoot: string): Promise<void> {
+	async start(workspaceRoot: string, forceRebuild = false): Promise<void> {
 		if (this.state !== 'stopped' && this.state !== 'error') {
 			vscode.window.showWarningMessage(
 				`CScout is already ${this.state}. Stop it first if you want to restart.`
@@ -104,34 +107,76 @@ export class CScoutLifecycle {
 					this.setState('analyzing');
 
 					// 1. Generate .cs
-					progress.report({ message: 'Detecting build system...' });
-					const buildResult = await generateCsFile(
-						workspaceRoot,
-						this.settings,
-						this.channel,
-						progress
-					);
+					let buildResult = this.lastBuildResult;
+					if (!forceRebuild || !buildResult) {
+						progress.report({ message: 'Detecting build system...' });
+						buildResult = await generateCsFile(
+							workspaceRoot,
+							this.settings,
+							this.channel,
+							progress,
+							undefined
+						);
+						this.lastBuildResult = buildResult;
+					}
 					this.csFilePath = buildResult.csFilePath;
-					this.lastBuildResult = buildResult;
 
 					this.dbPath = path.join(workspaceRoot, `${buildResult.projectName}.db`);
 
-					if (buildResult.buildSystem === 'existing-cs' && fs.existsSync(this.dbPath)) {
-						this.channel.appendLine(`Found existing database at ${this.dbPath}. Skipping analysis step.`);
+					let dbIsValid = false;
+					let identifierCount = 0;
+
+					if (!forceRebuild && buildResult.buildSystem === 'existing-cs' && fs.existsSync(this.dbPath)) {
+						try {
+							const inWsl = commandRunsInWsl(this.settings.sqlite3Path);
+							const resolved = resolveCommand(this.settings.sqlite3Path, [
+								pathForCommand(this.dbPath, inWsl),
+								'"SELECT COUNT(*) FROM IDS;"'
+							]);
+							
+							const { stdout } = await util.promisify(cp.exec)(`${resolved.command} ${resolved.args.join(' ')}`);
+							identifierCount = parseInt(stdout.trim());
+							dbIsValid = !isNaN(identifierCount) && identifierCount > 0;
+						} catch (e) {
+							this.channel.appendLine(`Failed to validate existing database: ${String(e)}`);
+							dbIsValid = false;
+						}
+					}
+
+					if (dbIsValid) {
+						this.channel.appendLine(`Found existing populated database (${identifierCount} identifiers). Skipping analysis step.`);
 					} else {
+						if (fs.existsSync(this.dbPath)) {
+							this.channel.appendLine(`Existing database is empty or invalid. Deleting and re-analyzing...`);
+							fs.unlinkSync(this.dbPath);
+						}
 						// 2 & 3. Run cscout -s sqlite | sqlite3 project.db
+						progress.report({ message: 'Checking dependencies...' });
+						await checkDependency(this.settings.cscoutBinaryPath, 'cscout not found. Please ensure it is installed and configured in settings.', commandRunsInWsl(this.settings.cscoutBinaryPath));
+						await checkDependency(this.settings.sqlite3Path, 'sqlite3 not found. Please install it (e.g., sudo apt install sqlite3 or brew install sqlite3).', commandRunsInWsl(this.settings.sqlite3Path));
 						progress.report({ message: 'Analyzing source code (this may take a while)...' });
 						await this.runAnalysisPipeline(workspaceRoot, progress);
 					}
 
 					// 4. Start csapi
 					this.setState('indexing');
+					progress.report({ message: 'Checking Python...' });
+					await checkDependency(this.settings.pythonPath, 'python3 not found. Please install Python 3.', commandRunsInWsl(this.settings.pythonPath));
 					progress.report({ message: 'Starting query server...' });
 					await this.startCsapi(workspaceRoot);
 
 					// 5. Poll until indexes ready
 					progress.report({ message: 'Building search indexes...' });
 					await this.waitForCsapi();
+
+					// 6. Verify that the DB actually contains data (catches missing standard headers)
+					const client = this.getClient();
+					if (client) {
+						const counts = await client.getIdentifierCounts();
+						if (!counts['all'] || counts['all'] === 0) {
+							throw new Error('CScout analysis completed but no identifiers were found in the database. This usually means CScout could not find standard header files or the include paths were wrong. Please check the Output panel for details.');
+						}
+					}
 
 					// Ready!
 					this.setState('ready');
@@ -160,7 +205,23 @@ export class CScoutLifecycle {
 			throw new Error('Internal error: paths not set');
 		}
 
-		try { fs.unlinkSync(this.dbPath); } catch { /* did not exist */ }
+		let unlinked = false;
+		for (let i = 0; i < 10; i++) {
+			try {
+				if (!fs.existsSync(this.dbPath)) {
+					unlinked = true;
+					break;
+				}
+				fs.unlinkSync(this.dbPath);
+				unlinked = true;
+				break;
+			} catch (err) {
+				await new Promise(r => setTimeout(r, 500));
+			}
+		}
+		if (!unlinked) {
+			throw new Error(`Failed to delete old database at ${this.dbPath}. The file is likely locked by another process.`);
+		}
 
 		const cscoutInWsl = commandRunsInWsl(this.settings.cscoutBinaryPath);
 		const csFilePath = pathForCommand(this.csFilePath, cscoutInWsl);
@@ -300,8 +361,9 @@ export class CScoutLifecycle {
 		this.channel.appendLine(`Starting csapi.py on port ${activePort}`);
 
 		const pythonInWsl = commandRunsInWsl(this.settings.pythonPath);
+		const resolvedCsapi = await resolveScriptPath(this.settings.csapiPyPath, this.settings.cscoutBinaryPath, pythonInWsl);
 		const resolved = resolveCommand(this.settings.pythonPath, [
-			pathForCommand(this.settings.csapiPyPath, pythonInWsl),
+			pathForCommand(resolvedCsapi, pythonInWsl),
 			pathForCommand(this.dbPath, pythonInWsl),
 			'-p',
 			String(activePort),
@@ -379,13 +441,14 @@ export class CScoutLifecycle {
 
 	async reanalyze(workspaceRoot: string): Promise<void> {
 		await this.stop();
-		await this.start(workspaceRoot);
+		await this.start(workspaceRoot, true);
 	}
 
 	async stop(): Promise<void> {
 		if (this.state === 'stopped') {
 			return;
 		}
+		this.setState('stopped');
 		this.channel.appendLine('Stopping CScout.');
 
 		// Ask csapi to shut down gracefully.
@@ -395,7 +458,6 @@ export class CScoutLifecycle {
 		await new Promise((r) => setTimeout(r, 500));
 
 		await this.stopProcesses();
-		this.setState('stopped');
 	}
 
 	private async stopProcesses(): Promise<void> {

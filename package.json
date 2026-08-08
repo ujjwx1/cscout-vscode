@@ -1,6 +1,7 @@
 {
   "name": "cscout-vscode",
   "displayName": "CScout",
+  "publisher": "cscout",
   "icon": "logo.png",
   "description": "VS Code interface for the CScout C source code analyzer",
   "version": "0.1.0",
@@ -164,7 +165,7 @@
         "cscout.binaryPath": {
           "type": "string",
           "default": "cscout",
-          "description": "Path to cscout binary (resolved via PATH on Linux/macOS; full path required on Windows)"
+          "description": "Path to CScout binary (resolved via PATH on Linux/macOS; full path required on Windows)"
         },
         "cscout.cscocoPyPath": {
           "type": "string",

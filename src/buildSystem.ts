@@ -23,6 +23,8 @@ import {
 	commandRunsInWsl,
 	pathForCommand,
 	resolveCommand,
+	resolveScriptPath,
+	checkDependency,
 } from './platform';
 
 export type BuildSystem =
@@ -321,22 +323,35 @@ export async function generateCsFile(
 	workspaceRoot: string,
 	settings: CScoutSettings,
 	channel: vscode.OutputChannel,
-	progress?: vscode.Progress<{ message?: string; increment?: number }>
+	progress?: vscode.Progress<{ message?: string; increment?: number }>,
+	previousBuildResult?: BuildResult
 ): Promise<BuildResult> {
 	const detected = detectAll(workspaceRoot);
 	const projectName =
 		settings.projectName || path.basename(workspaceRoot) || 'project';
 
-	const answer = await askUserAboutBuildSystem(detected);
-	if (!answer) {
-		throw new Error('User cancelled build system selection.');
+	let answer: { choice: BuildSystem; existingCs?: string };
+	
+	if (previousBuildResult) {
+		answer = {
+			choice: previousBuildResult.buildSystem,
+			existingCs: previousBuildResult.buildSystem === 'existing-cs' ? previousBuildResult.csFilePath : undefined
+		};
+	} else {
+		const userChoice = await askUserAboutBuildSystem(detected);
+		if (!userChoice) {
+			throw new Error('User cancelled build system selection.');
+		}
+		answer = userChoice;
 	}
 
 	if (answer.choice === 'existing-cs' && answer.existingCs) {
 		const fileCount = countProcessedFiles(answer.existingCs);
-		vscode.window.showInformationMessage(
-			`Using existing workspace file. ${fileCount} translation units will be analyzed.`
-		);
+		if (!previousBuildResult) {
+			vscode.window.showInformationMessage(
+				`Using existing workspace file. ${fileCount} translation units will be analyzed.`
+			);
+		}
 		return {
 			csFilePath: answer.existingCs,
 			projectName,
@@ -358,6 +373,7 @@ export async function generateCsFile(
 
 		case 'cmake':
 			channel.appendLine('--- Running CMake configure ---');
+			await checkDependency('cmake', 'cmake not found. Please install it (e.g., sudo apt install cmake or brew install cmake) before using the CMake build system detection.', commandRunsInWsl('cmake'));
 			await spawnStreaming(
 				'cmake',
 				['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', '-B', 'build', '.'],
@@ -375,6 +391,7 @@ export async function generateCsFile(
 
 		case 'makefile':
 			channel.appendLine('--- Running csmake ---');
+			await checkDependency(settings.csmakePath, 'csmake not found. Please ensure CScout is properly installed and csmake is in your PATH.', commandRunsInWsl(settings.csmakePath));
 			await spawnStreaming(settings.csmakePath, [], workspaceRoot, channel);
 			// csmake writes make.cs — rename it to <projectName>.cs.
 			try {
@@ -434,7 +451,8 @@ export async function generateCsFile(
 	channel.appendLine('--- Running cscoco ---');
 
 	const inWsl = commandRunsInWsl(settings.pythonPath);
-	const cscocoArg = pathForCommand(settings.cscocoPyPath, inWsl);
+	const resolvedCscoco = await resolveScriptPath(settings.cscocoPyPath, settings.cscoutBinaryPath, inWsl);
+	const cscocoArg = pathForCommand(resolvedCscoco, inWsl);
 	const ccArg = pathForCommand(compileCommandsPath, inWsl);
 
 	const cscocoOutput = await spawnStreaming(
