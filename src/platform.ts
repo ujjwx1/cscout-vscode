@@ -212,7 +212,12 @@ export function toEditorPath(cscoutPath: string, platform: Platform = detectPlat
 	if (!cscoutPath) return cscoutPath;
 	if (platform === 'linux' || platform === 'darwin') return cscoutPath;
 	if (platform === 'cygwin') return fromCygwinPath(cscoutPath);
-	if (platform === 'win32-native') return cscoutPath.replace(/\//g, '\\');
+	if (platform === 'win32-native') {
+		if (cscoutPath.startsWith(wslMountRoot) || cscoutPath.startsWith('/mnt/')) {
+			return fromWslPath(cscoutPath);
+		}
+		return cscoutPath.replace(/\//g, '\\');
+	}
 	return fromWslPath(cscoutPath);
 }
 
