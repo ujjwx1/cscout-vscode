@@ -1877,23 +1877,29 @@ function renderInspectHtml(detail: import('./cscoutClient').CScoutIdentifierDeta
 
     const bool = (v: number) => v ? '✓ Yes' : '—';
 
-    const attrs = [
-        ['Read-only', bool(id.READONLY)],
-        ['Ordinary identifier', bool(id.ORDINARY)],
-        ['Macro', bool(id.MACRO)],
-        ['Function-like macro', bool(id.FUNMACRO)],
-        ['Macro argument', bool(id.MACROARG)],
-        ['Undefined macro', bool(id.UNDEFMACRO)],
-        ['Function', bool(id.FUN)],
-        ['File scope', bool(id.CSCOPE)],
-        ['Project scope', bool(id.LSCOPE)],
-        ['Typedef', bool(id.TYPEDEF)],
-        ['Struct/union/enum tag', bool(id.SUETAG)],
-        ['Struct/union member', bool(id.SUMEMBER)],
-        ['Enum member', bool(id.ENUM)],
-        ['Label', bool(id.LABEL)],
-        ['Yacc identifier', bool(id.YACC)],
-        ['Unused', bool(id.UNUSED)],
+    const attrSource = identifierAttributes.length > 0
+        ? identifierAttributes
+        : [
+            {id: 'READONLY', name: 'Read-only'},
+            {id: 'ORDINARY', name: 'Ordinary identifier'},
+            {id: 'MACRO', name: 'Macro'},
+            {id: 'FUNMACRO', name: 'Function-like macro'},
+            {id: 'MACROARG', name: 'Macro argument'},
+            {id: 'UNDEFMACRO', name: 'Undefined macro'},
+            {id: 'FUN', name: 'Function'},
+            {id: 'CSCOPE', name: 'File scope'},
+            {id: 'LSCOPE', name: 'Project scope'},
+            {id: 'TYPEDEF', name: 'Typedef'},
+            {id: 'SUETAG', name: 'Struct/union/enum tag'},
+            {id: 'SUMEMBER', name: 'Struct/union member'},
+            {id: 'ENUM', name: 'Enum member'},
+            {id: 'LABEL', name: 'Label'},
+            {id: 'YACC', name: 'Yacc identifier'},
+            {id: 'UNUSED', name: 'Unused'},
+        ];
+
+    const attrs = attrSource.map(a => [a.name, bool((id as any)[a.id])]);
+    attrs.push(
         ['Can be replaced by C constant', bool(id.DEFCCONSTVAL || id.EXPCCONSTVAL)],
         ['Value defined as C compile-time constant', bool(id.DEFCCONSTVAL)],
         ['Value expanded as C compile-time constant', bool(id.EXPCCONSTVAL)],
@@ -1933,13 +1939,13 @@ function renderInspectHtml(detail: import('./cscoutClient').CScoutIdentifierDeta
             if (!metrics.length) return '';
             const pre: any = metrics.find((m: any) => m.PRECPP === 1) ?? {};
             const post: any = metrics.find((m: any) => m.PRECPP === 0) ?? {};
-            const keys = Object.keys(METRIC_DESCRIPTIONS);
+            const keys = Object.keys(getMetricDescriptions());
             const rows = keys
                 .filter(k => (pre[k] !== null && pre[k] !== undefined) || (post[k] !== null && post[k] !== undefined))
                 .map(k => {
                     const preVal = pre[k] !== null && pre[k] !== undefined ? escapeHtml(String(pre[k])) : '—';
                     const postVal = post[k] !== null && post[k] !== undefined ? escapeHtml(String(post[k])) : '—';
-                    return `<tr><td>${escapeHtml(METRIC_DESCRIPTIONS[k])}</td><td style="text-align:right">${preVal}</td><td style="text-align:right">${postVal}</td></tr>`;
+                    return `<tr><td>${escapeHtml(getMetricDescriptions()[k])}</td><td style="text-align:right">${preVal}</td><td style="text-align:right">${postVal}</td></tr>`;
                 }).join('');
             return `<details><summary>Metrics (Pre-cpp / Post-cpp)</summary><table>
                 <tr><th style="text-align:left">Description</th><th style="text-align:right">Pre-cpp Value</th><th style="text-align:right">Post-cpp Value</th></tr>
@@ -2028,9 +2034,9 @@ function showFileDetailPanel(
         { enableScripts: true }
     );
     const metrics = detail.metrics ?? {};
-    const metricsRows = Object.keys(METRIC_DESCRIPTIONS)
+    const metricsRows = Object.keys(getMetricDescriptions())
         .filter(k => metrics[k] !== null && metrics[k] !== undefined)
-        .map(k => `<tr><td>${escapeHtml(METRIC_DESCRIPTIONS[k])}</td><td style="text-align:right">${escapeHtml(String(metrics[k]))}</td></tr>`)
+        .map(k => `<tr><td>${escapeHtml(getMetricDescriptions()[k])}</td><td style="text-align:right">${escapeHtml(String(metrics[k]))}</td></tr>`)
         .join('');
     const functionsRows = detail.functions
         .map(f => `<tr><td>${escapeHtml(f.NAME)}</td><td style="text-align:right">${f.LNUM ?? '—'}</td><td style="text-align:right">${f.FANIN}</td><td style="text-align:right">${f.FANOUT ?? '—'}</td><td style="text-align:right">${f.CCYCL1 ?? '—'}</td></tr>`)
@@ -2104,9 +2110,9 @@ function showFileMetricsAggregatePanel(
     );
     const fidToName = new Map(files.map(f => [f.FID, f.NAME]));
     const fileRows = metrics.filter((m: any) => m.PRECPP === 0);
-    const cols = Object.keys(METRIC_DESCRIPTIONS);
+    const cols = Object.keys(getMetricDescriptions());
     const headerCells = cols
-        .map((k, i) => `<th data-col="${i + 1}" onclick="sortBy(${i + 1})" style="cursor:pointer;text-align:right" title="${escapeHtml(METRIC_DESCRIPTIONS[k])}">${escapeHtml(k)}</th>`)
+        .map((k, i) => `<th data-col="${i + 1}" onclick="sortBy(${i + 1})" style="cursor:pointer;text-align:right" title="${escapeHtml(getMetricDescriptions()[k])}">${escapeHtml(k)}</th>`)
         .join('');
     const rows = fileRows.map(m => {
         const fileName = fidToName.get(m.FID) ?? String(m.FID);
@@ -2175,9 +2181,9 @@ function showFunMetricsAggregatePanel(
         { enableScripts: true }
     );
     const fnMap = new Map(fns.map(f => [f.ID, f]));
-    const cols = Object.keys(METRIC_DESCRIPTIONS);
+    const cols = Object.keys(getMetricDescriptions());
     const headerCells = cols
-        .map((k, i) => `<th data-col="${i + 1}" onclick="sortBy(${i + 1})" style="cursor:pointer;text-align:right" title="${escapeHtml(METRIC_DESCRIPTIONS[k])}">${escapeHtml(k)}</th>`)
+        .map((k, i) => `<th data-col="${i + 1}" onclick="sortBy(${i + 1})" style="cursor:pointer;text-align:right" title="${escapeHtml(getMetricDescriptions()[k])}">${escapeHtml(k)}</th>`)
         .join('');
     const postRows = metrics.filter((m: any) => m.PRECPP === 0);
     const rows = postRows.map((m: any) => {
