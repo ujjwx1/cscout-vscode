@@ -1,5 +1,5 @@
 /*
- * platform.ts — cross-platform command execution layer.
+ * platform.ts - cross-platform command execution layer.
  *
  * The extension can be running on native Linux, macOS, Windows-with-WSL,
  * Windows-native, or Windows-with-Cygwin.  The CScout binaries may live
@@ -26,7 +26,7 @@ export interface ResolvedCommand {
 
 /*
  * Detect the runtime platform.  WSL detection matters because Windows
- * VS Code cannot execute Linux ELF binaries directly — everything must
+ * VS Code cannot execute Linux ELF binaries directly - everything must
  * be routed through 'wsl' when Linux binaries are in play.
  */
 export function detectPlatform(): Platform {

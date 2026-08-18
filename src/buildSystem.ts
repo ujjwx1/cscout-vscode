@@ -1,14 +1,14 @@
 /*
- * buildSystem.ts — detect the project's build system and produce a
+ * buildSystem.ts - detect the project's build system and produce a
  * CScout .cs workspace file.
  *
  * We support five paths:
- *   1. Existing .cs file — use directly
- *   2. Existing compile_commands.json — feed to cscoco
- *   3. Makefile — run csmake
- *   4. CMakeLists.txt — run cmake, then cscoco
- *   5. meson.build — run meson setup, then cscoco
- *   6. configure.ac (Autotools) — run ./configure, then csmake
+ *   1. Existing .cs file - use directly
+ *   2. Existing compile_commands.json - feed to cscoco
+ *   3. Makefile - run csmake
+ *   4. CMakeLists.txt - run cmake, then cscoco
+ *   5. meson.build - run meson setup, then cscoco
+ *   6. configure.ac (Autotools) - run ./configure, then csmake
  *
  * Detection is presented to the user as a choice, never done silently.
  * Every external command goes through the platform layer so it works
@@ -70,7 +70,7 @@ export interface DetectedBuildSystems {
 /*
  * Look for build descriptor files in the workspace root.  We use fs
  * directly rather than vscode.workspace.findFiles to avoid path-scheme
- * ambiguity across platforms — findFiles behaves differently for WSL
+ * ambiguity across platforms - findFiles behaves differently for WSL
  * mounts vs native filesystem.
  */
 export function detectAll(workspaceRoot: string): DetectedBuildSystems {
@@ -89,7 +89,7 @@ export function detectAll(workspaceRoot: string): DetectedBuildSystems {
 			.filter((f) => f.endsWith('.cs'))
 			.map((f) => path.join(workspaceRoot, f));
 	} catch {
-		/* directory unreadable — leave list empty */
+		/* directory unreadable - leave list empty */
 	}
 
 	let compileCommandsPath: string | undefined;
@@ -112,7 +112,7 @@ export function detectAll(workspaceRoot: string): DetectedBuildSystems {
 }
 
 /*
- * Count '#pragma process' directives in a .cs file — reflects the number
+ * Count '#pragma process' directives in a .cs file - reflects the number
  * of translation units CScout will analyze.  Used for the post-generation
  * notification so the user sees what was captured.
  */
@@ -186,7 +186,7 @@ function spawnStreaming(
 
 /*
  * Present a choice to the user when a build system is detected.  We never
- * run configuration commands silently — the user must confirm.
+ * run configuration commands silently - the user must confirm.
  */
 async function askUserAboutBuildSystem(
 	detected: DetectedBuildSystems
@@ -374,12 +374,25 @@ export async function generateCsFile(
 		case 'cmake':
 			channel.appendLine('--- Running CMake configure ---');
 			await checkDependency('cmake', 'cmake not found. Please install it (e.g., sudo apt install cmake or brew install cmake) before using the CMake build system detection.', commandRunsInWsl('cmake'));
-			await spawnStreaming(
-				'cmake',
-				['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', '-B', 'build', '.'],
-				workspaceRoot,
-				channel
-			);
+			try {
+				await spawnStreaming(
+					'cmake',
+					['-DCMAKE_EXPORT_COMPILE_COMMANDS=ON', '-B', 'build', '.'],
+					workspaceRoot,
+					channel
+				);
+			} catch (err) {
+				const message = (err as Error).message;
+				const missingDep = /Could NOT find (\w+)/.exec(message);
+				if (missingDep) {
+					throw new Error(
+						`CMake configuration failed: missing system dependency "${missingDep[1]}". ` +
+						`Install it (e.g. sudo apt install lib${missingDep[1].toLowerCase()}-dev) and try again, ` +
+						`or choose a different project.`
+					);
+				}
+				throw err;
+			}
 			compileCommandsPath = path.join(workspaceRoot, 'build', 'compile_commands.json');
 			break;
 
@@ -393,7 +406,7 @@ export async function generateCsFile(
 			channel.appendLine('--- Running csmake ---');
 			await checkDependency(settings.csmakePath, 'csmake not found. Please ensure CScout is properly installed and csmake is in your PATH.', commandRunsInWsl(settings.csmakePath));
 			await spawnStreaming(settings.csmakePath, [], workspaceRoot, channel);
-			// csmake writes make.cs — rename it to <projectName>.cs.
+			// csmake writes make.cs - rename it to <projectName>.cs.
 			try {
 				fs.renameSync(path.join(workspaceRoot, 'make.cs'), csFilePath);
 			} catch {

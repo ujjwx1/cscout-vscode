@@ -1,16 +1,16 @@
 /*
- * cscoutClient.ts — HTTP client for the csapi REST server.
+ * cscoutClient.ts - HTTP client for the csapi REST server.
  *
  * csapi is a standard HTTP/1.1 server exposing the CScout SQLite
  * database as JSON.  Field names come directly from SQL column names
- * (uppercase) — we mirror them here to avoid ambiguity.
+ * (uppercase) - we mirror them here to avoid ambiguity.
  */
 
 import * as http from 'http';
 
 /*
  * Field naming: csapi returns SQL column names verbatim (EID, NAME,
- * FUN, UNUSED, etc.).  We do not translate — what you see in the API
+ * FUN, UNUSED, etc.).  We do not translate - what you see in the API
  * matches what the extension code accesses.
  */
 
@@ -313,14 +313,14 @@ export class CScoutClient {
 
 	/*
 	 * Ask csapi to shut down gracefully.  Called before killing the
-	 * process so listeners can clean up.  Errors are ignored — the
+	 * process so listeners can clean up.  Errors are ignored - the
 	 * server may already be gone.
 	 */
 	async quit(): Promise<void> {
 		try {
 			await this.get<unknown>('/quit');
 		} catch {
-			/* server is gone or was never running — expected */
+			/* server is gone or was never running - expected */
 		}
 	}
 	async getIdentifierDetail(eid: number): Promise<CScoutIdentifierDetail> {
