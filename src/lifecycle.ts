@@ -1,5 +1,5 @@
 /*
- * lifecycle.ts — orchestrates the full analysis pipeline.
+ * lifecycle.ts - orchestrates the full analysis pipeline.
  *
  * State machine:
  *   stopped   → analyzing (user starts)
@@ -247,7 +247,7 @@ export class CScoutLifecycle {
 					shell: false,
 				});
 			}
-			// sqlite3Process not needed — same process
+			// sqlite3Process not needed - same process
 			this.sqlite3Process = undefined;
 
 			let stderr = '';
@@ -408,7 +408,7 @@ export class CScoutLifecycle {
 					return;
 				}
 			} catch {
-				/* server not up yet — keep polling */
+				/* server not up yet - keep polling */
 			}
 			await new Promise((r) => setTimeout(r, intervalMs));
 		}
@@ -427,7 +427,7 @@ export class CScoutLifecycle {
 		);
 		const notify = async () => {
 			const answer = await vscode.window.showInformationMessage(
-				'Project structure changed — a .c file was added or removed. CScout analysis may be stale.',
+				'Project structure changed - a .c file was added or removed. CScout analysis may be stale.',
 				'Re-analyze Now',
 				'Dismiss'
 			);
@@ -448,16 +448,16 @@ export class CScoutLifecycle {
 		if (this.state === 'stopped') {
 			return;
 		}
-		this.setState('stopped');
 		this.channel.appendLine('Stopping CScout.');
 
-		// Ask csapi to shut down gracefully.
+		// Ask csapi to shut down gracefully before clearing the reference.
 		if (this.client) {
 			await this.client.quit();
 		}
 		await new Promise((r) => setTimeout(r, 500));
 
 		await this.stopProcesses();
+		this.setState('stopped');
 	}
 
 	private async stopProcesses(): Promise<void> {
