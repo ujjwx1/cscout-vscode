@@ -185,7 +185,10 @@ export class CScoutLifecycle {
 				}
 			);
 		} catch (err: unknown) {
-			const message = err instanceof Error ? err.message : String(err);
+			let message = err instanceof Error ? err.message : String(err);
+			if (/ENOENT|No such file or directory|not found|can't open file/i.test(message)) {
+				message += '\n\nThis usually means one of the CScout tool paths in your settings is wrong. Run "CScout: Verify Setup" to check.';
+			}
 			this.channel.appendLine(`ERROR: ${message}`);
 			this.setState('error', message);
 			this.events.onError(message);

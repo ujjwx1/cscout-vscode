@@ -20,6 +20,23 @@ import { CScoutLifecycle, CScoutState } from './lifecycle';
 import { CScoutSettings } from './buildSystem';
 import { toEditorPath, toCScoutPath, checkDependency, commandRunsInWsl } from './platform';
 
+let cscoutVersion: string | undefined;
+
+async function detectCScoutVersion(binaryPath: string): Promise<void> {
+    try {
+        const { exec } = require('child_process');
+        const util = require('util');
+        const execAsync = util.promisify(exec);
+        const { stdout } = await execAsync(`"${binaryPath}" --version`);
+        const match = /(\d+\.\d+(\.\d+)?)/.exec(stdout);
+        if (match) {
+            cscoutVersion = match[1];
+        }
+    } catch {
+        // Version detection is best-effort; leave undefined if it fails.
+    }
+}
+
 const CSCOUT_KEY_FIRST_ACTIVATION = 'cscout.firstActivationShown';
 
 function getCustomIcon(context: vscode.ExtensionContext, iconName: string) {
@@ -1399,6 +1416,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
         },
         onReady: async (build) => {
+            void detectCScoutVersion(settings.cscoutBinaryPath);
             channel.appendLine(`Ready.  ${build.fileCount} files, workspace: ${build.projectName}`);
             const client = lifecycle.getClient();
             if (client) {
@@ -1800,12 +1818,13 @@ function updateStatusBar(
             break;
         case 'ready': {
             const build = lifecycle.getBuildResult();
+            const versionSuffix = cscoutVersion ? ` (v${cscoutVersion})` : '';
             if (isStale) {
                 item.text = `$(warning) CScout (stale)${build ? ` · ${build.fileCount} files` : ''}`;
-                item.tooltip = 'CScout ready (source files changed) - click to stop';
+                item.tooltip = `CScout${versionSuffix} ready (source files changed) - click to stop`;
             } else {
                 item.text = `$(check) CScout${build ? ` · ${build.fileCount} files` : ''}`;
-                item.tooltip = 'CScout ready - click to stop';
+                item.tooltip = `CScout${versionSuffix} ready - click to stop`;
             }
             item.command = 'cscout.stop';
             break;
@@ -2611,6 +2630,7 @@ th { color: var(--vscode-descriptionForeground); font-size: .9em; }
 <p>On macOS (with Homebrew): <code>brew install python3 sqlite graphviz</code></p>
 <p>On Windows with WSL: open a WSL terminal and run the Ubuntu/Debian command above.</p>
 <p>On Windows with Cygwin: use the Cygwin package manager (<code>setup-x86_64.exe</code>) to install <code>python3</code>, <code>sqlite3</code>, and <code>graphviz</code>.</p>
+<p>Once installed, run <strong>CScout: Verify Setup</strong> from the Control Panel to confirm all tool paths are configured correctly.</p>
 </div>
 
 <div class="step">
