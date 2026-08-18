@@ -1,5 +1,5 @@
 /*
- * extension.ts — entry point.  Wires the lifecycle, sidebar panels,
+ * extension.ts - entry point.  Wires the lifecycle, sidebar panels,
  * editor providers, and diagnostics.  Every UI action goes through
  * commands so keyboard shortcuts and menus stay consistent.
  */
@@ -27,6 +27,14 @@ function getCustomIcon(context: vscode.ExtensionContext, iconName: string) {
         light: vscode.Uri.file(context.asAbsolutePath(`resources/icons/light/${iconName}.svg`)),
         dark: vscode.Uri.file(context.asAbsolutePath(`resources/icons/dark/${iconName}.svg`))
     };
+}
+
+function friendlyErrorLabel(err: unknown): string {
+	const message = (err as Error)?.message ?? String(err);
+	if (/ECONNRESET|ECONNREFUSED|EPIPE|socket hang up/i.test(message)) {
+		return 'CScout stopped';
+	}
+	return `Error: ${message}`;
 }
 
 // -----------------------------------------------------------------------
@@ -66,19 +74,20 @@ function loadSettings(): CScoutSettings {
 // Sidebar providers
 // -----------------------------------------------------------------------
 
-type Node = { kind: 'group'; label: string; count?: number; groupKey: string }
-    | { kind: 'identifier'; id: CScoutIdentifier }
-    | { kind: 'file'; file: CScoutFile }
-    | { kind: 'function'; fn: CScoutFunction }
+export type Node =
+    | { kind: 'identifier'; id: CScoutIdentifier; groupKey: string }
+    | { kind: 'file'; file: CScoutFile; groupKey: string }
+    | { kind: 'function'; fn: CScoutFunction; groupKey: string }
+    | { kind: 'group'; label: string; count?: number; groupKey: string }
+    | { kind: 'action'; label: string; command: string; icon?: string; args?: any[] }
     | { kind: 'empty'; label: string }
-    | { kind: 'action'; label: string; command: string; args?: any[]; icon?: string }
     | { kind: 'load-more'; groupKey: string; offset: number; total: number };
 
 export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
     private _emitter = new vscode.EventEmitter<Node | undefined | void>();
     readonly onDidChangeTreeData = this._emitter.event;
 
-    // Only stores items currently shown in each group — bounded memory.
+    // Only stores items currently shown in each group - bounded memory.
     // Key: groupKey, Value: items fetched so far for that group.
     private groupItems: Map<string, CScoutIdentifier[]> = new Map();
     // Total counts per group, from /identifiers/counts endpoint.
@@ -98,7 +107,7 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
         this._emitter.fire();
     }
 
-    /** Called by cscout.loadMore command — fetches next 200 from server and appends. */
+    /** Called by cscout.loadMore command - fetches next 200 from server and appends. */
     async loadMore(node: any): Promise<void> {
         if (!node?.groupKey) return;
         const client = this.getClient();
@@ -167,6 +176,7 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
         if (node.kind !== 'identifier') { return new vscode.TreeItem('?', vscode.TreeItemCollapsibleState.None); }
         const id = node.id;
         const item = new vscode.TreeItem(id.NAME, vscode.TreeItemCollapsibleState.None);
+        item.id = `${node.groupKey}-identifier-${id.EID}`;
         const kind = describeIdKind(id);
         item.description = kind;
         item.tooltip = new vscode.MarkdownString(
@@ -193,7 +203,7 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
                 try {
                     this.counts = await client.getIdentifierCounts();
                 } catch (err) {
-                    return [{ kind: 'empty', label: `Error: ${(err as Error).message}` }];
+                    return [{ kind: 'empty', label: friendlyErrorLabel(err) }];
                 }
             }
             const c = this.counts;
@@ -219,19 +229,19 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
                     this.groupItems.set(node.groupKey, page);
                     const total = this.counts?.[this.countKey(node.groupKey)] ?? page.length;
                     this.groupTotals.set(node.groupKey, total);
-                    const items: Node[] = page.map(id => ({ kind: 'identifier' as const, id }));
+                    const items: Node[] = page.map(id => ({ kind: 'identifier' as const, id, groupKey: node.groupKey }));
                     if (page.length === 0) return [{ kind: 'empty', label: 'No identifiers' }];
                     if (total > page.length) {
                         items.push({ kind: 'load-more', groupKey: node.groupKey, offset: page.length, total });
                     }
                     return items;
                 } catch (err) {
-                    return [{ kind: 'empty', label: `Error: ${(err as Error).message}` }];
+                    return [{ kind: 'empty', label: friendlyErrorLabel(err) }];
                 }
             }
             // Subsequent renders use cached (already-fetched) items.
             const total = this.groupTotals.get(node.groupKey) ?? stored.length;
-            const items: Node[] = stored.map(id => ({ kind: 'identifier' as const, id }));
+            const items: Node[] = stored.map(id => ({ kind: 'identifier' as const, id, groupKey: node.groupKey }));
             if (total > stored.length) {
                 items.push({ kind: 'load-more', groupKey: node.groupKey, offset: stored.length, total });
             }
@@ -280,6 +290,7 @@ class ActionTreeProvider implements vscode.TreeDataProvider<Node> {
                 case 'cscout.reanalyze': item.iconPath = new vscode.ThemeIcon('sync'); break;
                 case 'workbench.action.openSettings': item.iconPath = new vscode.ThemeIcon('settings'); break;
                 case 'cscout.showWalkthrough': item.iconPath = new vscode.ThemeIcon('book'); break;
+                case 'cscout.verifySetup': item.iconPath = new vscode.ThemeIcon('check'); break;
                 default: item.iconPath = new vscode.ThemeIcon('play');
             }
             return item;
@@ -294,14 +305,16 @@ class ActionTreeProvider implements vscode.TreeDataProvider<Node> {
             return [
                 { kind: 'action', label: 'Start CScout', command: 'cscout.start' },
                 { kind: 'action', label: 'Tutorial', command: 'cscout.showWalkthrough' },
-                { kind: 'action', label: 'Configure CScout', command: 'workbench.action.openSettings', args: ['cscout'] }
+                { kind: 'action', label: 'Configure CScout', command: 'workbench.action.openSettings', args: ['cscout'] },
+                { kind: 'action', label: 'Verify Setup', command: 'cscout.verifySetup' }
             ];
         } else {
             return [
                 { kind: 'action', label: 'Stop CScout', command: 'cscout.stop' },
                 { kind: 'action', label: 'Refresh UI', command: 'cscout.refresh' },
                 { kind: 'action', label: 'Re-analyze Codebase', command: 'cscout.reanalyze' },
-                { kind: 'action', label: 'Configure CScout', command: 'workbench.action.openSettings', args: ['cscout'] }
+                { kind: 'action', label: 'Configure CScout', command: 'workbench.action.openSettings', args: ['cscout'] },
+                { kind: 'action', label: 'Verify Setup', command: 'cscout.verifySetup' }
             ];
         }
     }
@@ -328,7 +341,7 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
         this._emitter.fire();
     }
 
-    /** Called by cscout.loadMore command — fetches next 200 from server and appends. */
+    /** Called by cscout.loadMore command - fetches next 200 from server and appends. */
     async loadMore(node: any): Promise<void> {
         if (!node?.groupKey) return;
         const client = this.getClient();
@@ -345,7 +358,7 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
 
     /** Fetch a page of files for a specific group from the server. */
     private async fetchPage(client: CScoutClient, groupKey: string, offset: number, limit: number): Promise<CScoutFile[]> {
-        // Files endpoints don't support pagination yet — fetch all and slice.
+        // Files endpoints don't support pagination yet - fetch all and slice.
         // This is acceptable since file lists are much smaller than identifier lists.
         const query = groupKey === 'all' ? undefined : groupKey.replace(/-/g, '_');
         const allFiles = await client.getFiles(query);
@@ -401,9 +414,9 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
         const item = new vscode.TreeItem(uri, vscode.TreeItemCollapsibleState.None);
         item.iconPath = new vscode.ThemeIcon('file-code');
 
-        const rwText = file.RO ? '$(lock) read-only' : '$(edit) writable';
+        const rwText = file.RO ? 'read-only' : 'writable';
         const complexity = (file as any).COMPLEXITY || 0;
-        item.description = `${rwText}${complexity ? `  $(pulse) ${complexity}` : ''}`;
+        item.description = `${rwText}${complexity ? `  ·  complexity ${complexity}` : ''}`;
 
         item.tooltip = `${file.NAME}\nStatus: ${file.RO ? 'read-only' : 'writable'}`;
         item.command = {
@@ -412,7 +425,7 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
             arguments: [file.NAME],
         };
         item.contextValue = 'cscoutFile';
-        item.id = `file-${file.FID}`;
+        item.id = `${node.groupKey}-file-${file.FID}`;
         (item as any).__fid = file.FID;
         return item;
     }
@@ -427,7 +440,7 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
                 try {
                     this.counts = await client.getFileCounts();
                 } catch (err) {
-                    return [{ kind: 'empty', label: `Error: ${(err as Error).message}` }];
+                    return [{ kind: 'empty', label: friendlyErrorLabel(err) }];
                 }
             }
             const c = this.counts;
@@ -455,17 +468,17 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
                     const total = this.counts?.[countKey] ?? page.length;
                     this.groupTotals.set(node.groupKey, total);
                     if (page.length === 0) return [{ kind: 'empty', label: 'No files' }];
-                    const result: Node[] = page.map(file => ({ kind: 'file' as const, file }));
+                    const result: Node[] = page.map(file => ({ kind: 'file' as const, file, groupKey: node.groupKey }));
                     if (total > page.length) {
                         result.push({ kind: 'load-more', groupKey: node.groupKey, offset: page.length, total });
                     }
                     return result;
                 } catch (err) {
-                    return [{ kind: 'empty', label: `Error: ${(err as Error).message}` }];
+                    return [{ kind: 'empty', label: friendlyErrorLabel(err) }];
                 }
             }
             const total = this.groupTotals.get(node.groupKey) ?? stored.length;
-            const result: Node[] = stored.map(file => ({ kind: 'file' as const, file }));
+            const result: Node[] = stored.map(file => ({ kind: 'file' as const, file, groupKey: node.groupKey }));
             if (total > stored.length) {
                 result.push({ kind: 'load-more', groupKey: node.groupKey, offset: stored.length, total });
             }
@@ -497,7 +510,7 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
         this._emitter.fire();
     }
 
-    /** Called by cscout.loadMore command — fetches next 200 from server and appends. */
+    /** Called by cscout.loadMore command - fetches next 200 from server and appends. */
     async loadMore(node: any): Promise<void> {
         if (!node?.groupKey) return;
         const client = this.getClient();
@@ -559,6 +572,7 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
         }
         const fn = node.fn;
         const item = new vscode.TreeItem(fn.NAME, vscode.TreeItemCollapsibleState.None);
+        item.id = `${node.groupKey}-function-${fn.ID}`;
         item.iconPath = new vscode.ThemeIcon(fn.ISMACRO ? 'symbol-constant' : 'symbol-function');
 
         const tooltip = new vscode.MarkdownString();
@@ -569,9 +583,9 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
         tooltip.appendMarkdown(`$(pulse) **Complexity:** ${fn.CCYCL1 ?? '?'}`);
         item.tooltip = tooltip;
         item.command = {
-            command: 'cscout.showCallGraph',
-            arguments: [fn.ID, true],
-            title: 'Show call graph',
+            command: 'cscout.openFunctionLocation',
+            arguments: [fn],
+            title: 'Go to definition',
         };
         return item;
     }
@@ -586,7 +600,7 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
                 try {
                     this.counts = await client.getFunctionCounts();
                 } catch (err) {
-                    return [{ kind: 'empty', label: `Error: ${(err as Error).message}` }];
+                    return [{ kind: 'empty', label: friendlyErrorLabel(err) }];
                 }
             }
             const c = this.counts;
@@ -609,18 +623,18 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
                     const countKey = node.groupKey.replace('-', '_');
                     const total = this.counts?.[countKey] ?? page.length;
                     this.groupTotals.set(node.groupKey, total);
-                    const items: Node[] = page.map(fn => ({ kind: 'function' as const, fn }));
+                    const items: Node[] = page.map(fn => ({ kind: 'function' as const, fn, groupKey: node.groupKey }));
                     if (page.length === 0) return [{ kind: 'empty', label: 'No functions' }];
                     if (total > page.length) {
                         items.push({ kind: 'load-more', groupKey: node.groupKey, offset: page.length, total });
                     }
                     return items;
                 } catch (err) {
-                    return [{ kind: 'empty', label: `Error: ${(err as Error).message}` }];
+                    return [{ kind: 'empty', label: friendlyErrorLabel(err) }];
                 }
             }
             const total = this.groupTotals.get(node.groupKey) ?? stored.length;
-            const items: Node[] = stored.map(fn => ({ kind: 'function' as const, fn }));
+            const items: Node[] = stored.map(fn => ({ kind: 'function' as const, fn, groupKey: node.groupKey }));
             if (total > stored.length) {
                 items.push({ kind: 'load-more', groupKey: node.groupKey, offset: stored.length, total });
             }
@@ -884,7 +898,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
      * Performance notes:
      * - Uses CancellationToken to bail out if the user has moved away.
      * - Uses getFunctionByName() for complexity lookup (1 row vs 10,000).
-     * - Does NOT store any global state — each hover is self-contained.
+     * - Does NOT store any global state - each hover is self-contained.
      */
     async provideHover(
         document: vscode.TextDocument,
@@ -904,7 +918,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
             const md = new vscode.MarkdownString(undefined, true);
             md.isTrusted = true;
 
-            // Header — name and kind
+            // Header - name and kind
             md.appendMarkdown(`### $(symbol-${exact.FUN ? 'function' : exact.MACRO ? 'constant' : 'variable'}) ${exact.NAME}\n\n`);
             md.appendMarkdown(`**Kind:** ${describeIdKind(exact)}  \n`);
 
@@ -920,7 +934,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
                     if (fn && fn.CCYCL1 !== null) {
                         md.appendMarkdown(`**Cyclomatic complexity:** ${fn.CCYCL1}  \n`);
                     }
-                } catch { /* skip — metric is optional */ }
+                } catch { /* skip - metric is optional */ }
             }
 
             // Cross-file boundary check
@@ -937,11 +951,11 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
 
             // Should-be-static info
             if (exact.LSCOPE && !exact.CSCOPE && !exact.READONLY && !crossesFileBoundary && detail) {
-                md.appendMarkdown(`\n💡 **Should be static** — only accessed within a single file  \n`);
+                md.appendMarkdown(`\n💡 **Should be static** - only accessed within a single file  \n`);
             }
 
             // Status flags
-            if (exact.UNUSED && !exact.READONLY) md.appendMarkdown(`\n⚠ **Unused** — whole-program analysis  \n`);
+            if (exact.UNUSED && !exact.READONLY) md.appendMarkdown(`\n⚠ **Unused** - whole-program analysis  \n`);
             if (exact.READONLY) md.appendMarkdown(`🔒 Read-only  \n`);
 
             // Action links
@@ -1144,7 +1158,7 @@ function locationToVSCode(loc: CScoutLocation): vscode.Location {
 }
 
 // -----------------------------------------------------------------------
-// Diagnostics — unused identifiers surfaced in Problems panel
+// Diagnostics - unused identifiers surfaced in Problems panel
 // -----------------------------------------------------------------------
 
 async function resolveRange(
@@ -1207,10 +1221,10 @@ async function refreshDiagnostics(
         const byFile = new Map<string, vscode.Diagnostic[]>();
         const docCache = new Map<string, vscode.TextDocument>();
 
-        // Limit how many we resolve locations for — resolving each hits the
+        // Limit how many we resolve locations for - resolving each hits the
         // server.  Prioritize ordinary identifiers and functions.
         const worthUnused = unused.filter((id) => !id.READONLY && (id.ORDINARY || id.FUN || id.MACRO)).slice(0, 500);
-        const worthStatic = shouldStatic.filter((id) => !id.READONLY && (id.ORDINARY || id.FUN) && !id.TYPEDEF && !id.ENUM && !id.SUETAG).slice(0, 500);
+        const worthStatic = shouldStatic.filter((id) => !id.TYPEDEF && !id.ENUM && !id.SUETAG).slice(0, 500);
 
         for (const id of worthUnused) {
             try {
@@ -1259,7 +1273,7 @@ async function refreshDiagnostics(
             diagnostics.set(vscode.Uri.file(file), list);
         }
     } catch {
-        /* server may be down — leave problems empty */
+        /* server may be down - leave problems empty */
     }
 }
 
@@ -1268,7 +1282,7 @@ async function refreshDiagnostics(
 // -----------------------------------------------------------------------
 
 // -----------------------------------------------------------------------
-// CodeLens provider — shows caller/callee/complexity counts above functions
+// CodeLens provider - shows caller/callee/complexity counts above functions
 // -----------------------------------------------------------------------
 
 export class CScoutCodeLensProvider implements vscode.CodeLensProvider {
@@ -1374,6 +1388,15 @@ export function activate(context: vscode.ExtensionContext): void {
             fileDepsProvider.refresh();
             actionProvider.setState(state);
             codeLensProvider.refresh();
+            
+            if (state === 'ready') {
+                const client = lifecycle.getClient();
+                if (client) {
+                    void refreshDiagnostics(client, diagnostics);
+                }
+            } else {
+                diagnostics.clear();
+            }
         },
         onReady: async (build) => {
             channel.appendLine(`Ready.  ${build.fileCount} files, workspace: ${build.projectName}`);
@@ -1570,6 +1593,22 @@ export function activate(context: vscode.ExtensionContext): void {
                 vscode.window.showErrorMessage(`Could not open identifier: ${(err as Error).message}`);
             }
         }),
+        vscode.commands.registerCommand('cscout.openFunctionLocation', async (fn: CScoutFunction) => {
+            if (!fn.FILE || fn.LNUM === null || fn.LNUM === undefined) {
+                vscode.window.showInformationMessage(`No definition location for function ${fn.NAME}.`);
+                return;
+            }
+            try {
+                const uri = vscode.Uri.file(toEditorPath(fn.FILE));
+                const doc = await vscode.workspace.openTextDocument(uri);
+                const editor = await vscode.window.showTextDocument(doc);
+                const pos = new vscode.Position(Math.max(0, fn.LNUM - 1), 0);
+                editor.selection = new vscode.Selection(pos, pos);
+                editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+            } catch (err) {
+                vscode.window.showErrorMessage(`Could not open function: ${(err as Error).message}`);
+            }
+        }),
         vscode.commands.registerCommand('cscout.openFile', async (filePath: string) => {
             try {
                 const uri = vscode.Uri.file(toEditorPath(filePath));
@@ -1632,6 +1671,43 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
         vscode.commands.registerCommand('cscout.showWalkthrough', () => {
             showWalkthrough(context);
+        }),
+        vscode.commands.registerCommand('cscout.verifySetup', async () => {
+            const settings = vscode.workspace.getConfiguration('cscout');
+            const binaryPath = settings.get<string>('binaryPath', 'cscout');
+            const cscocoPyPath = settings.get<string>('cscocoPyPath', 'cscoco.py');
+            const csapiPyPath = settings.get<string>('csapiPyPath', '');
+            const csmakePath = settings.get<string>('csmakePath', 'csmake');
+            const pythonPath = settings.get<string>('pythonPath', 'python3');
+
+            const checks: { name: string; path: string }[] = [
+                { name: 'CScout binary', path: binaryPath },
+                { name: 'cscoco.py', path: cscocoPyPath },
+                { name: 'csapi.py', path: csapiPyPath },
+                { name: 'csmake', path: csmakePath },
+                { name: 'Python', path: pythonPath },
+            ];
+
+            const results: string[] = [];
+            for (const check of checks) {
+                if (!check.path) {
+                    results.push(`○ ${check.name}: not set`);
+                    continue;
+                }
+                try {
+                    await checkDependency(check.path, `${check.name} not found`, commandRunsInWsl(check.path));
+                    results.push(`✓ ${check.name}: found (${check.path})`);
+                } catch {
+                    results.push(`✗ ${check.name}: NOT FOUND (${check.path})`);
+                }
+            }
+
+            const panel = vscode.window.createOutputChannel('CScout Setup Check');
+            panel.clear();
+            panel.appendLine('CScout Setup Verification');
+            panel.appendLine('');
+            results.forEach(r => panel.appendLine(r));
+            panel.show();
         }),
         vscode.commands.registerCommand('cscout.loadMore', async (node) => {
             // Each provider's loadMore fetches next page from server and appends.
@@ -1714,22 +1790,22 @@ function updateStatusBar(
             break;
         case 'analyzing':
             item.text = '$(sync~spin) CScout: Analyzing';
-            item.tooltip = (detail || 'Running CScout analysis...') + ' — click to stop';
+            item.tooltip = (detail || 'Running CScout analysis...') + ' - click to stop';
             item.command = 'cscout.stop';
             break;
         case 'indexing':
             item.text = '$(sync~spin) CScout: Building indexes';
-            item.tooltip = 'csapi is building search indexes... — click to stop';
+            item.tooltip = 'csapi is building search indexes... - click to stop';
             item.command = 'cscout.stop';
             break;
         case 'ready': {
             const build = lifecycle.getBuildResult();
             if (isStale) {
                 item.text = `$(warning) CScout (stale)${build ? ` · ${build.fileCount} files` : ''}`;
-                item.tooltip = 'CScout ready (source files changed) — click to stop';
+                item.tooltip = 'CScout ready (source files changed) - click to stop';
             } else {
                 item.text = `$(check) CScout${build ? ` · ${build.fileCount} files` : ''}`;
-                item.tooltip = 'CScout ready — click to stop';
+                item.tooltip = 'CScout ready - click to stop';
             }
             item.command = 'cscout.stop';
             break;
@@ -1873,7 +1949,7 @@ async function showCallGraph(
         fnid = eidOrFnid;
         fnName = nameHint ?? `function ${fnid}`;
     } else {
-        // Called from hover with EID — look up function by name.
+        // Called from hover with EID - look up function by name.
         const detail = await client.getIdentifier(eidOrFnid);
         fnName = detail.identifier.NAME;
         const fn = await client.getFunctionByName(fnName);
@@ -1884,7 +1960,7 @@ async function showCallGraph(
                 vscode.ViewColumn.Beside,
                 { enableScripts: true }
             ).webview.html = `<!doctype html><html><body style="font-family:sans-serif;padding:2em">
-                <p>No call graph available for <strong>${escapeHtml(fnName)}</strong> — not tracked as a callable function.</p>
+                <p>No call graph available for <strong>${escapeHtml(fnName)}</strong> - not tracked as a callable function.</p>
                 </body></html>`;
             return;
         }
@@ -2106,7 +2182,7 @@ const METRIC_DESCRIPTIONS: Record<string, string> = {
 function renderInspectHtml(detail: import('./cscoutClient').CScoutIdentifierDetail, baseUrl: string): string {
     const id = detail.identifier;
 
-    const bool = (v: number) => v ? '✓ Yes' : '—';
+    const bool = (v: number) => v ? '✓ Yes' : '-';
 
     const attrSource = identifierAttributes.length > 0
         ? identifierAttributes
@@ -2145,13 +2221,13 @@ function renderInspectHtml(detail: import('./cscoutClient').CScoutIdentifierDeta
 
     const projectsHtml = projects.length
         ? projects.map(p => `<li>${escapeHtml(p.NAME)}</li>`).join('')
-        : '<li>—</li>';
+        : '<li>-</li>';
 
     const filesHtml = depFiles.length
         ? depFiles.map(f =>
             `<tr><td>${escapeHtml(f.NAME)}</td><td>${f.RO ? '🔒' : '✏️'}</td></tr>`
         ).join('')
-        : '<tr><td colspan="2">—</td></tr>';
+        : '<tr><td colspan="2">-</td></tr>';
 
     const fnSection = detail.function_detail ? (() => {
         const fn = detail.function_detail!;
@@ -2174,8 +2250,8 @@ function renderInspectHtml(detail: import('./cscoutClient').CScoutIdentifierDeta
             const rows = keys
                 .filter(k => (pre[k] !== null && pre[k] !== undefined) || (post[k] !== null && post[k] !== undefined))
                 .map(k => {
-                    const preVal = pre[k] !== null && pre[k] !== undefined ? escapeHtml(String(pre[k])) : '—';
-                    const postVal = post[k] !== null && post[k] !== undefined ? escapeHtml(String(post[k])) : '—';
+                    const preVal = pre[k] !== null && pre[k] !== undefined ? escapeHtml(String(pre[k])) : '-';
+                    const postVal = post[k] !== null && post[k] !== undefined ? escapeHtml(String(post[k])) : '-';
                     return `<tr><td>${escapeHtml(getMetricDescriptions()[k])}</td><td style="text-align:right">${preVal}</td><td style="text-align:right">${postVal}</td></tr>`;
                 }).join('');
             return `<details><summary>Metrics (Pre-cpp / Post-cpp)</summary><table>
@@ -2270,7 +2346,7 @@ function showFileDetailPanel(
         .map(k => `<tr><td>${escapeHtml(getMetricDescriptions()[k])}</td><td style="text-align:right">${escapeHtml(String(metrics[k]))}</td></tr>`)
         .join('');
     const functionsRows = detail.functions
-        .map(f => `<tr><td>${escapeHtml(f.NAME)}</td><td style="text-align:right">${f.LNUM ?? '—'}</td><td style="text-align:right">${f.FANIN}</td><td style="text-align:right">${f.FANOUT ?? '—'}</td><td style="text-align:right">${f.CCYCL1 ?? '—'}</td></tr>`)
+        .map(f => `<tr><td>${escapeHtml(f.NAME)}</td><td style="text-align:right">${f.LNUM ?? '-'}</td><td style="text-align:right">${f.FANIN}</td><td style="text-align:right">${f.FANOUT ?? '-'}</td><td style="text-align:right">${f.CCYCL1 ?? '-'}</td></tr>`)
         .join('');
     const includesRows = detail.includes
         .map(f => `<li>${escapeHtml(f.NAME)}</li>`)
@@ -2316,13 +2392,13 @@ function showFileDetailPanel(
     <section>
         <details>
             <summary><h2 style="display: inline; margin: 0;">Includes (${detail.includes.length})</h2></summary>
-            <ul>${includesRows || '<li>—</li>'}</ul>
+            <ul>${includesRows || '<li>-</li>'}</ul>
         </details>
     </section>
     <section>
         <details>
             <summary><h2 style="display: inline; margin: 0;">Included by (${detail.included_by.length})</h2></summary>
-            <ul>${includedByRows || '<li>—</li>'}</ul>
+            <ul>${includedByRows || '<li>-</li>'}</ul>
         </details>
     </section>
     </body></html>`;
@@ -2349,7 +2425,7 @@ function showFileMetricsAggregatePanel(
         const fileName = fidToName.get(m.FID) ?? String(m.FID);
         const cells = cols.map(k => {
             const v = m[k];
-            const display = v !== null && v !== undefined ? escapeHtml(String(v)) : '—';
+            const display = v !== null && v !== undefined ? escapeHtml(String(v)) : '-';
             const sortVal = v !== null && v !== undefined ? String(v) : '';
             return `<td style="text-align:right" data-val="${sortVal}">${display}</td>`;
         }).join('');
@@ -2424,7 +2500,7 @@ function showFunMetricsAggregatePanel(
         const fnLnum = fn?.LNUM ?? 0;
         const cells = cols.map(k => {
             const v = m[k];
-            const display = v !== null && v !== undefined ? escapeHtml(String(v)) : '—';
+            const display = v !== null && v !== undefined ? escapeHtml(String(v)) : '-';
             const sortVal = v !== null && v !== undefined ? String(v) : '';
             return `<td style="text-align:right" data-val="${sortVal}">${display}</td>`;
         }).join('');
@@ -2482,7 +2558,7 @@ function showFunMetricsAggregatePanel(
 function showWalkthrough(context: vscode.ExtensionContext): void {
     const panel = vscode.window.createWebviewPanel(
         'cscoutWalkthrough',
-        'CScout — Getting Started',
+        'CScout - Getting Started',
         vscode.ViewColumn.One,
         { enableScripts: true }
     );
@@ -2517,11 +2593,11 @@ th { color: var(--vscode-descriptionForeground); font-size: .9em; }
 </style>
 </head><body>
 
-<h1>🔍 CScout — Getting Started</h1>
+<h1>🔍 CScout - Getting Started</h1>
 <p>CScout is a whole-program C source code analyzer that understands the C preprocessor. This extension brings CScout's analysis directly into VS Code.</p>
 
 <div class="step">
-<div class="step-number">Step 1 — Prerequisites</div>
+<div class="step-number">Step 1 - Prerequisites</div>
 <h2>Install Required Tools</h2>
 <p>The extension needs the following tools installed on your system (Linux/macOS) or accessible via WSL (Windows):</p>
 <table>
@@ -2532,27 +2608,30 @@ th { color: var(--vscode-descriptionForeground); font-size: .9em; }
 <tr><td><code>dot</code> <span style="color:var(--vscode-descriptionForeground);">(Optional)</span></td><td>Generates Call & Include graphs</td><td>System package manager (<code>graphviz</code>)</td></tr>
 </table>
 <p>On Ubuntu/Debian: <code>sudo apt install python3 sqlite3 graphviz</code></p>
+<p>On macOS (with Homebrew): <code>brew install python3 sqlite graphviz</code></p>
+<p>On Windows with WSL: open a WSL terminal and run the Ubuntu/Debian command above.</p>
+<p>On Windows with Cygwin: use the Cygwin package manager (<code>setup-x86_64.exe</code>) to install <code>python3</code>, <code>sqlite3</code>, and <code>graphviz</code>.</p>
 </div>
 
 <div class="step">
-<div class="step-number">Step 2 — Configure Paths</div>
+<div class="step-number">Step 2 - Configure Paths</div>
 <h2>Set Up Extension Settings</h2>
 <p>Tell the extension where to find the CScout tools:</p>
 <pre><code># In VS Code settings (cscout.*):
-cscout.binaryPath     — path to the CScout binary
-cscout.cscocoPyPath   — path to cscoco.py (for CMake/Meson projects)
-cscout.csapiPyPath    — path to csapi.py (REST server)
-cscout.csmakePath     — path to csmake (for Makefile projects)</code></pre>
+cscout.binaryPath     - path to the CScout binary
+cscout.cscocoPyPath   - path to cscoco.py (for CMake/Meson projects)
+cscout.csapiPyPath    - path to csapi.py (REST server)
+cscout.csmakePath     - path to csmake (for Makefile projects)</code></pre>
 <button onclick="openSettings()">Open CScout Settings</button>
 </div>
 
 <div class="step">
-<div class="step-number">Step 3 — Open a C Project</div>
+<div class="step-number">Step 3 - Open a C Project</div>
 <h2>Supported Build Systems</h2>
 <p>Open any C project folder in VS Code. The extension supports:</p>
 <table>
 <tr><th>Build System</th><th>How it works</th></tr>
-<tr><td>Existing <code>.cs</code> file</td><td>Used directly — fastest option</td></tr>
+<tr><td>Existing <code>.cs</code> file</td><td>Used directly - fastest option</td></tr>
 <tr><td>CMake</td><td>Runs <code>cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON</code> then cscoco</td></tr>
 <tr><td>Meson</td><td>Runs <code>meson setup build</code> then cscoco</td></tr>
 <tr><td>Makefile</td><td>Intercepts build with csmake</td></tr>
@@ -2561,7 +2640,7 @@ cscout.csmakePath     — path to csmake (for Makefile projects)</code></pre>
 </div>
 
 <div class="step">
-<div class="step-number">Step 4 — Start Analysis</div>
+<div class="step-number">Step 4 - Start Analysis</div>
 <h2>Run CScout</h2>
 <p>Click the <strong>▶ Start CScout</strong> button in the sidebar, or run:</p>
 <pre><code>Ctrl+Shift+P → CScout: Start Analysis</code></pre>
@@ -2577,7 +2656,7 @@ cscout.csmakePath     — path to csmake (for Makefile projects)</code></pre>
 </div>
 
 <div class="step">
-<div class="step-number">Step 5 — Explore Results</div>
+<div class="step-number">Step 5 - Explore Results</div>
 <h2>What You Can Do</h2>
 <table>
 <tr><th>Feature</th><th>How to use</th></tr>
