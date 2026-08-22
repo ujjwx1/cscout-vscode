@@ -77,6 +77,7 @@ export interface CScoutFunction {
 	FANIN: number;
 	FANOUT: number | null;
 	CCYCL1: number | null;
+	CCYCL1_PRE?: number | null;
 }
 
 export interface CScoutLocation {
@@ -240,6 +241,10 @@ export class CScoutClient {
 		return this.get<CScoutIdentifier[]>('/identifiers' + this.buildQuery(filters as Record<string, unknown>));
 	}
 
+	async resolveIdentifier(name: string, file: string, line: number): Promise<CScoutIdentifier> {
+		return this.get<CScoutIdentifier>('/identifier/resolve' + this.buildQuery({ name, file, line }));
+	}
+
 	/**
 	 * Fetch per-category identifier counts with a single SQL query.
 	 * Used by the sidebar to show folder counts without loading all rows.
@@ -248,8 +253,9 @@ export class CScoutClient {
 		return this.get<Record<string, number>>('/identifiers/counts');
 	}
 
-	async getIdentifier(eid: number): Promise<CScoutIdentifierDetail> {
-		return this.get<CScoutIdentifierDetail>(`/identifier?eid=${eid}`);
+	async getIdentifier(eid: number, limit?: number): Promise<CScoutIdentifierDetail> {
+		const q = limit ? `&limit=${limit}` : '';
+		return this.get<CScoutIdentifierDetail>(`/identifier?eid=${eid}${q}`);
 	}
 
 	async getFiles(query?: string): Promise<CScoutFile[]> {

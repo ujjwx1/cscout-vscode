@@ -194,10 +194,10 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
         const id = node.id;
         const item = new vscode.TreeItem(id.NAME, vscode.TreeItemCollapsibleState.None);
         item.id = `${node.groupKey}-identifier-${id.EID}`;
-        const kind = describeIdKind(id);
-        item.description = kind;
+        const kindStr = describeIdKind(id).join(', ');
+        item.description = kindStr;
         item.tooltip = new vscode.MarkdownString(
-            `**${id.NAME}**  \n${kind}  \nEID: \`${id.EID}\`  \n` +
+            `**${id.NAME}**  \n${kindStr}  \nEID: \`${id.EID}\`  \n` +
             (id.UNUSED ? 'Unused  \n' : '') +
             (id.READONLY ? 'Read-only  \n' : 'Writable  \n')
         );
@@ -597,7 +597,9 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
         tooltip.appendMarkdown(`**${fn.NAME}**\n\n`);
         tooltip.appendMarkdown(`$(sign-in) **Fan-in:** ${fn.FANIN} (Incoming)\n\n`);
         tooltip.appendMarkdown(`$(sign-out) **Fan-out:** ${fn.FANOUT ?? 0} (Outgoing)\n\n`);
-        tooltip.appendMarkdown(`$(pulse) **Complexity:** ${fn.CCYCL1 ?? '?'}`);
+        if (fn && fn.CCYCL1 !== null) {
+            tooltip.appendMarkdown(`$(pulse) **Complexity:** ${fn.CCYCL1_PRE ?? '?'} (Pre-CPP), ${fn.CCYCL1} (Post-CPP)`);
+        }
         item.tooltip = tooltip;
         item.command = {
             command: 'cscout.openFunctionLocation',
@@ -745,7 +747,7 @@ class FileDepsTreeProvider implements vscode.TreeDataProvider<Node> {
 // Identifier utility functions
 // -----------------------------------------------------------------------
 
-function describeIdKind(id: CScoutIdentifier): string {
+function describeIdKind(id: CScoutIdentifier): string[] {
     const attributes: string[] = [];
 
     // 1. Core Type (Most important)
@@ -766,7 +768,11 @@ function describeIdKind(id: CScoutIdentifier): string {
     // if (id.LSCOPE) attributes.push('Project scope');
 
     // 3. Modifiers
-    if (id.READONLY) attributes.push('Read-only');
+    if (id.READONLY) {
+        attributes.push('Read-only');
+    } else {
+        attributes.push('Writable');
+    }
     if (id.UNDEFMACRO) attributes.push('Undefined macro');
     if (id.UNDEFEDMACRO) attributes.push('Undefed macro');
     if (id.REDEFEDSAMEMACRO) attributes.push('Macro redefined with same value');
@@ -776,7 +782,9 @@ function describeIdKind(id: CScoutIdentifier): string {
     if (id.ORDINARY) attributes.push('Ordinary identifier');
     if (id.YACC) attributes.push('Yacc identifier');
 
-    return attributes.length > 0 ? attributes.join(', ') : 'Unknown identifier';
+    if (id.UNUSED) attributes.push('Unused');
+
+    return attributes;
 }
 
 function iconForId(id: CScoutIdentifier): vscode.ThemeIcon {
@@ -817,14 +825,28 @@ async function resolveExactIdentifierAtCursor(
     token?: vscode.CancellationToken
 ): Promise<CScoutIdentifier | undefined> {
     if (token?.isCancellationRequested) return undefined;
+
+    const targetLine = position.line + 1;
+    const targetFsPath = document.uri.fsPath;
+
+    try {
+        // Attempt exact EID resolution using CScout's token database.
+        const exactMatch = await client.resolveIdentifier(name, targetFsPath, targetLine);
+        if (exactMatch) {
+            return exactMatch;
+        }
+    } catch (e) {
+        // Ignore 404s and fallback if the exact token lookup fails
+    }
+
+    // Fallback to name heuristic for un-indexed/unsaved files
     const results = await client.getIdentifiers({ name, limit: 1000 });
     const matching = results.filter((r) => r.NAME === name);
 
     if (matching.length === 0) return undefined;
     if (matching.length === 1) return matching[0];
 
-    const targetLine = position.line + 1;
-    const targetFsPath = document.uri.fsPath.toLowerCase();
+    const targetFsPathLower = targetFsPath.toLowerCase();
 
     let fileMatch: CScoutIdentifier | undefined;
 
@@ -834,7 +856,7 @@ async function resolveExactIdentifierAtCursor(
         if (detail) {
             for (const loc of detail.locations) {
                 const locFsPath = vscode.Uri.file(toEditorPath(loc.FILE)).fsPath.toLowerCase();
-                if (locFsPath === targetFsPath) {
+                if (locFsPath === targetFsPathLower) {
                     if (loc.LNUM === targetLine) {
                         return r; // exact match
                     }
@@ -949,7 +971,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
                     const fn = await client.getFunctionByName(name);
                     if (token.isCancellationRequested) return;
                     if (fn && fn.CCYCL1 !== null) {
-                        md.appendMarkdown(`**Cyclomatic complexity:** ${fn.CCYCL1}  \n`);
+                        md.appendMarkdown(`**Cyclomatic complexity:** ${fn.CCYCL1_PRE ?? '?'} (Pre-CPP), ${fn.CCYCL1} (Post-CPP)  \n`);
                     }
                 } catch { /* skip - metric is optional */ }
             }
@@ -967,7 +989,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
             }
 
             // Should-be-static info
-            if (exact.LSCOPE && !exact.CSCOPE && !exact.READONLY && !crossesFileBoundary && detail) {
+            if (exact.LSCOPE && !exact.CSCOPE && !exact.READONLY && !exact.UNUSED && !crossesFileBoundary && exact.NAME !== 'main' && detail) {
                 md.appendMarkdown(`\n💡 **Should be static** - only accessed within a single file  \n`);
             }
 
@@ -1025,7 +1047,8 @@ class CScoutDefinitionProvider implements vscode.DefinitionProvider {
                 }
             }
             // Non-function: first non-readonly location.
-            const detail = await client.getIdentifier(exact.EID);
+            // Request a massive limit so we don't truncate the definition location if it's far down the list
+            const detail = await client.getIdentifier(exact.EID, 999999);
             const defLoc = detail.locations.find((l) => l.LNUM !== null && isWritable(l));
             if (defLoc) {
                 return [locationToVSCode(defLoc)];
@@ -1054,7 +1077,8 @@ class CScoutReferenceProvider implements vscode.ReferenceProvider {
         try {
             const exact = await resolveExactIdentifierAtCursor(client, document, position, name);
             if (!exact) return;
-            const detail = await client.getIdentifier(exact.EID);
+            // Request a massive limit to ensure Find All References actually finds ALL references
+            const detail = await client.getIdentifier(exact.EID, 999999);
             return detail.locations.filter((l) => l.LNUM !== null).map(locationToVSCode);
         } catch {
             return;
@@ -1273,10 +1297,11 @@ async function refreshDiagnostics(
                 const file = toEditorPath(loc.FILE);
                 const list = byFile.get(file) || [];
                 const range = await resolveRange(file, loc, id.NAME, docCache);
+                const typeStr = id.FUN ? 'function' : 'variable';
                 list.push(
                     new vscode.Diagnostic(
                         range,
-                        `CScout: identifier '${id.NAME}' should be static`,
+                        `CScout: ${typeStr} '${id.NAME}' should be static`,
                         vscode.DiagnosticSeverity.Information
                     )
                 );
@@ -1627,11 +1652,16 @@ export function activate(context: vscode.ExtensionContext): void {
                 vscode.window.showErrorMessage(`Could not open function: ${(err as Error).message}`);
             }
         }),
-        vscode.commands.registerCommand('cscout.openFile', async (filePath: string) => {
+        vscode.commands.registerCommand('cscout.openFile', async (filePath: string, line?: number) => {
             try {
                 const uri = vscode.Uri.file(toEditorPath(filePath));
                 const doc = await vscode.workspace.openTextDocument(uri);
-                await vscode.window.showTextDocument(doc);
+                const editor = await vscode.window.showTextDocument(doc);
+                if (line !== undefined) {
+                    const pos = new vscode.Position(Math.max(0, line - 1), 0);
+                    editor.selection = new vscode.Selection(pos, pos);
+                    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+                }
             } catch (err) {
                 vscode.window.showErrorMessage(`Could not open file: ${(err as Error).message}`);
             }
@@ -1860,7 +1890,15 @@ async function promptForFunctionEid(client: CScoutClient): Promise<number | unde
     return pick?.value;
 }
 
-function makeGraphInteractive(html: string): string {
+function makeGraphInteractive(html: string, showAll?: boolean): string {
+    const hasToggle = showAll !== undefined;
+    const toggleHtml = hasToggle ? `
+        <div style="position: fixed; top: 10px; left: 10px; z-index: 1000; background: var(--vscode-editor-background); padding: 5px 10px; border: 1px solid var(--vscode-widget-border); border-radius: 3px;">
+            <label style="cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                <input type="checkbox" id="showAll" ${showAll ? 'checked' : ''}> Show file-scoped functions
+            </label>
+        </div>` : '';
+    
     return html
         .replace('svg { max-width: 100%; height: auto; }', `
             svg {
@@ -1904,7 +1942,14 @@ function makeGraphInteractive(html: string): string {
             }
         </style>`)
         .replace('</body>', `
+        ${toggleHtml}
         <script>
+            ${hasToggle ? `
+            const vscode = acquireVsCodeApi();
+            document.getElementById('showAll')?.addEventListener('change', (e) => {
+                vscode.postMessage({ command: 'toggleAll', value: e.target.checked });
+            });
+            ` : ''}
             let scale = 1, x = 0, y = 0, isDragging = false, startX, startY;
             const svg = document.querySelector('svg');
             if (svg) {
@@ -2000,28 +2045,41 @@ async function showCallGraph(
         { enableScripts: true }
     );
 
-    try {
-        const http = await import('http');
-        const svg = await new Promise<string>((resolve, reject) => {
-            const baseUrl = new URL(client.getBaseUrl());
-            http.get({
-                host: baseUrl.hostname,
-                port: parseInt(baseUrl.port),
-                path: `/callgraph?fnid=${fnid}`,
-                timeout: 15000,
-            }, (res) => {
-                let body = '';
-                res.setEncoding('utf-8');
-                res.on('data', (chunk) => body += chunk);
-                res.on('end', () => resolve(body));
-            }).on('error', reject).on('timeout', () => reject(new Error('timeout')));
-        });
-        panel.webview.html = makeGraphInteractive(svg);
-    } catch (err) {
-        panel.webview.html = `<!doctype html><html><body style="font-family:sans-serif;padding:2em">
-            <p>Error generating call graph: ${escapeHtml(String(err))}</p>
-            </body></html>`;
-    }
+    let showAll = false;
+
+    const renderGraph = async () => {
+        try {
+            const http = await import('http');
+            const svg = await new Promise<string>((resolve, reject) => {
+                const baseUrl = new URL(client.getBaseUrl());
+                http.get({
+                    host: baseUrl.hostname,
+                    port: parseInt(baseUrl.port),
+                    path: `/callgraph?fnid=${fnid}&all=${showAll ? 1 : 0}`,
+                    timeout: 15000,
+                }, (res) => {
+                    let body = '';
+                    res.setEncoding('utf-8');
+                    res.on('data', (chunk) => body += chunk);
+                    res.on('end', () => resolve(body));
+                }).on('error', reject).on('timeout', () => reject(new Error('timeout')));
+            });
+            panel.webview.html = makeGraphInteractive(svg, showAll);
+        } catch (err) {
+            panel.webview.html = `<!doctype html><html><body style="font-family:sans-serif;padding:2em">
+                <p>Error generating call graph: ${escapeHtml(String(err))}</p>
+                </body></html>`;
+        }
+    };
+
+    panel.webview.onDidReceiveMessage(message => {
+        if (message.command === 'toggleAll') {
+            showAll = message.value;
+            renderGraph();
+        }
+    });
+
+    renderGraph();
 }
 
 async function showIncludeGraph(
@@ -2309,18 +2367,13 @@ summary { cursor: pointer; font-weight: bold; padding: .3em 0; }
 
 <section>
 <p>
-${id.MACRO ? '<span class="badge">macro</span>' : ''}
-${id.FUN ? '<span class="badge">function</span>' : ''}
-${id.ORDINARY && !id.FUN ? '<span class="badge">variable</span>' : ''}
-${id.TYPEDEF ? '<span class="badge">typedef</span>' : ''}
-${id.UNUSED ? '<span class="badge" style="background:var(--vscode-inputValidation-warningBackground)">unused</span>' : ''}
-${id.READONLY ? '<span class="badge">read-only</span>' : '<span class="badge">writable</span>'}
+${describeIdKind(id).map(k => `<span class="badge"${k === 'Unused' ? ' style="background:var(--vscode-inputValidation-warningBackground)"' : ''}>${escapeHtml(k.toLowerCase())}</span>`).join('\n')}
 </p>
 <p><strong>Matches ${detail.occurrences ?? 0} occurrence(s)</strong></p>
 ${detail.locations && detail.locations.length
             ? `<details><summary>Locations</summary><ul>${detail.locations
                 .filter(l => l.LNUM !== null)
-                .map(l => `<li><a href="${baseUrl.replace(/\/$/, '')}/open?file=${encodeURIComponent(l.FILE)}&line=${l.LNUM}">${escapeHtml(l.FILE)}:${l.LNUM}</a></li>`)
+                .map(l => `<li><a href="command:cscout.openFile?${encodeURIComponent(JSON.stringify([l.FILE, l.LNUM]))}">${escapeHtml(l.FILE)}:${l.LNUM}</a></li>`)
                 .join('')
             }</ul></details>`
             : ''}
@@ -2450,6 +2503,20 @@ function showFileMetricsAggregatePanel(
         }).join('');
         return `<tr data-file="${escapeHtml(fileName)}"><td data-val="${escapeHtml(fileName)}">${escapeHtml(fileName)}</td>${cells}</tr>`;
     }).join('');
+
+    const sumCells = cols.map(k => {
+        let sum = 0;
+        let count = 0;
+        for (const m of fileRows) {
+            if (m[k] !== null && m[k] !== undefined) {
+                sum += Number(m[k]);
+                count++;
+            }
+        }
+        const avg = count > 0 ? (sum / count).toFixed(2) : '-';
+        return `<td style="text-align:right">Sum: ${sum}<br>Avg: ${avg}</td>`;
+    }).join('');
+    const footer = `<tfoot><tr style="font-weight:bold;background:var(--vscode-editor-inactiveSelectionBackground)"><td>Total</td>${sumCells}</tr></tfoot>`;
     const listener = panel.webview.onDidReceiveMessage(async msg => {
         if (msg.command === 'open' && msg.file) {
             const uri = vscode.Uri.file(toEditorPath(msg.file));
@@ -2470,7 +2537,7 @@ function showFileMetricsAggregatePanel(
     <p>Click a column header to sort. Click a row to open the file.</p>
     <div style="overflow:auto;max-height:80vh">
     <table id="t"><thead><tr><th data-col="0" onclick="sortBy(0)" style="cursor:pointer;text-align:left">File</th>${headerCells}</tr></thead>
-    <tbody id="tb">${rows}</tbody></table></div>
+    <tbody id="tb">${rows}</tbody>${footer}</table></div>
     <script>
     const vscode = acquireVsCodeApi();
     let sortCol=0, sortAsc=false;
@@ -2525,6 +2592,20 @@ function showFunMetricsAggregatePanel(
         }).join('');
         return `<tr data-file="${escapeHtml(fnFile)}" data-lnum="${fnLnum}"><td data-val="${escapeHtml(fnName)}">${escapeHtml(fnName)}</td>${cells}</tr>`;
     }).join('');
+
+    const sumCells = cols.map(k => {
+        let sum = 0;
+        let count = 0;
+        for (const m of postRows) {
+            if (m[k] !== null && m[k] !== undefined) {
+                sum += Number(m[k]);
+                count++;
+            }
+        }
+        const avg = count > 0 ? (sum / count).toFixed(2) : '-';
+        return `<td style="text-align:right">Sum: ${sum}<br>Avg: ${avg}</td>`;
+    }).join('');
+    const footer = `<tfoot><tr style="font-weight:bold;background:var(--vscode-editor-inactiveSelectionBackground)"><td>Total</td>${sumCells}</tr></tfoot>`;
     const listener = panel.webview.onDidReceiveMessage(async msg => {
         if (msg.command === 'open' && msg.file) {
             const uri = vscode.Uri.file(toEditorPath(msg.file));
@@ -2549,7 +2630,7 @@ function showFunMetricsAggregatePanel(
     <p>Click a column header to sort. Click a row to navigate to the function definition.</p>
     <div style="overflow:auto;max-height:80vh">
     <table id="t"><thead><tr><th data-col="0" onclick="sortBy(0)" style="cursor:pointer;text-align:left">Function</th>${headerCells}</tr></thead>
-    <tbody id="tb">${rows}</tbody></table></div>
+    <tbody id="tb">${rows}</tbody>${footer}</table></div>
     <script>
     const vscode = acquireVsCodeApi();
     let sortCol=0, sortAsc=false;
