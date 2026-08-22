@@ -33,7 +33,6 @@ export interface CScoutIdentifier {
 	REDEFEDSAMEMACRO?: number;
 	REDEFEDDIFFMACRO?: number;
 	MACRO: number;
-	FUNMACRO: number;
 	MACROARG: number;
 	CPPCONST: number;
 	CPPSTRVAL: number;

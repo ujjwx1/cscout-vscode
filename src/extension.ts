@@ -800,13 +800,31 @@ function describeIdKind(id: CScoutIdentifier): string[] {
 }
 
 function iconForId(id: CScoutIdentifier): vscode.ThemeIcon {
-    if (id.UNUSED) return new vscode.ThemeIcon('warning', new vscode.ThemeColor('problemsWarningIcon.foreground'));
-    if (id.MACRO) return new vscode.ThemeIcon('symbol-constant');
-    if (id.FUN) return new vscode.ThemeIcon('symbol-function');
-    if (id.TYPEDEF) return new vscode.ThemeIcon('symbol-interface');
-    if (id.SUETAG) return new vscode.ThemeIcon('symbol-structure');
-    if (id.SUMEMBER || id.ENUM) return new vscode.ThemeIcon('symbol-field');
-    return new vscode.ThemeIcon('symbol-variable');
+    let baseIcon = 'symbol-variable'; // Default for Ordinary identifier
+
+    if (id.MACRO) {
+        baseIcon = 'symbol-constant';
+    } else if (id.FUN) {
+        baseIcon = 'symbol-function';
+    } else if (id.TYPEDEF) {
+        baseIcon = 'symbol-type-parameter';
+    } else if (id.SUETAG) {
+        baseIcon = 'symbol-struct';
+    } else if (id.ENUM) {
+        baseIcon = 'symbol-enum-member';
+    } else if (id.SUMEMBER) {
+        baseIcon = 'symbol-field';
+    } else if (id.LABEL) {
+        baseIcon = 'symbol-keyword';
+    } else if (id.YACC) {
+        baseIcon = 'symbol-string';
+    }
+
+    if (id.UNUSED) {
+        return new vscode.ThemeIcon(baseIcon, new vscode.ThemeColor('problemsWarningIcon.foreground'));
+    }
+
+    return new vscode.ThemeIcon(baseIcon);
 }
 
 
@@ -2277,21 +2295,22 @@ function renderInspectHtml(detail: import('./cscoutClient').CScoutIdentifierDeta
         ? identifierAttributes
         : [
             {id: 'READONLY', name: 'Read-only'},
+            {id: 'SUETAG', name: 'Tag for struct/union/enum'},
+            {id: 'SUMEMBER', name: 'Member of struct/union'},
+            {id: 'LABEL', name: 'Label'},
             {id: 'ORDINARY', name: 'Ordinary identifier'},
             {id: 'MACRO', name: 'Macro'},
-            {id: 'FUNMACRO', name: 'Function-like macro'},
-            {id: 'MACROARG', name: 'Macro argument'},
             {id: 'UNDEFMACRO', name: 'Undefined macro'},
-            {id: 'FUN', name: 'Function'},
+            {id: 'UNDEFEDMACRO', name: 'Undefed macro'},
+            {id: 'REDEFEDSAMEMACRO', name: 'Macro redefined with same value'},
+            {id: 'REDEFEDDIFFMACRO', name: 'Macro redefined with different value'},
+            {id: 'MACROARG', name: 'Macro argument'},
             {id: 'CSCOPE', name: 'File scope'},
             {id: 'LSCOPE', name: 'Project scope'},
             {id: 'TYPEDEF', name: 'Typedef'},
-            {id: 'SUETAG', name: 'Struct/union/enum tag'},
-            {id: 'SUMEMBER', name: 'Struct/union member'},
-            {id: 'ENUM', name: 'Enum member'},
-            {id: 'LABEL', name: 'Label'},
+            {id: 'ENUM', name: 'Enumeration constant'},
             {id: 'YACC', name: 'Yacc identifier'},
-            {id: 'UNUSED', name: 'Unused'},
+            {id: 'FUN', name: 'Function'}
         ];
 
     const attrs = attrSource.map(a => [a.name, bool((id as any)[a.id])]);
