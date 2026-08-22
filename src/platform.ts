@@ -1,15 +1,20 @@
-/*
- * platform.ts - cross-platform command execution layer.
- *
- * The extension can be running on native Linux, macOS, Windows-with-WSL,
- * Windows-native, or Windows-with-Cygwin.  The CScout binaries may live
- * anywhere: system PATH, WSL filesystem, a custom install, etc.
- *
- * This module resolves how to invoke a binary regardless of environment
- * by combining runtime OS detection with user-provided settings.  Every
- * spawn in the extension goes through resolveCommand() so callers never
- * need to know about wsl, cygwin, or PATH lookups.
- */
+// (C) Copyright 2026 Ujjwal Aggarwal
+//
+// This file is part of CScout.
+//
+// CScout is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// CScout is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with CScout.  If not, see <http://www.gnu.org/licenses/>.
+
 
 import * as cp from 'child_process';
 import * as os from 'os';

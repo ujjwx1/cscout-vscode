@@ -1,24 +1,20 @@
-/*
- * lifecycle.ts - orchestrates the full analysis pipeline.
- *
- * State machine:
- *   stopped   → analyzing (user starts)
- *   analyzing → indexing  (cscout + sqlite3 finished; csapi is booting)
- *   indexing  → ready     (csapi reports indexes_ready)
- *   any       → error     (something failed)
- *   ready     → stopped   (user stops or window closes)
- *
- * The pipeline itself is:
- *   1. buildSystem.generateCsFile()  → produces project.cs
- *   2. cscout -s sqlite project.cs   → SQL dump on stdout
- *   3. sqlite3 project.db            → consumes the dump, builds the DB
- *   4. csapi project.db              → HTTP server on the DB
- *   5. Poll /status until indexes_ready
- *
- * Steps 2 and 3 are chained by a Node stream pipe.  Progress feedback
- * during (2) comes from parsing cscout's stderr, which prints
- * "Processing <file>" lines as it works.
- */
+// (C) Copyright 2026 Ujjwal Aggarwal
+//
+// This file is part of CScout.
+//
+// CScout is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// CScout is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with CScout.  If not, see <http://www.gnu.org/licenses/>.
+
 
 import * as cp from 'child_process';
 import * as fs from 'fs';

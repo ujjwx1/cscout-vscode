@@ -1,19 +1,20 @@
-/*
- * buildSystem.ts - detect the project's build system and produce a
- * CScout .cs workspace file.
- *
- * We support five paths:
- *   1. Existing .cs file - use directly
- *   2. Existing compile_commands.json - feed to cscoco
- *   3. Makefile - run csmake
- *   4. CMakeLists.txt - run cmake, then cscoco
- *   5. meson.build - run meson setup, then cscoco
- *   6. configure.ac (Autotools) - run ./configure, then csmake
- *
- * Detection is presented to the user as a choice, never done silently.
- * Every external command goes through the platform layer so it works
- * on native Linux, macOS, Windows-WSL, and Cygwin.
- */
+// (C) Copyright 2026 Ujjwal Aggarwal
+//
+// This file is part of CScout.
+//
+// CScout is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// CScout is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with CScout.  If not, see <http://www.gnu.org/licenses/>.
+
 
 import * as cp from 'child_process';
 import * as fs from 'fs';

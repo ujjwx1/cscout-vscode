@@ -1,10 +1,20 @@
-/*
- * cscoutClient.ts - HTTP client for the csapi REST server.
- *
- * csapi is a standard HTTP/1.1 server exposing the CScout SQLite
- * database as JSON.  Field names come directly from SQL column names
- * (uppercase) - we mirror them here to avoid ambiguity.
- */
+// (C) Copyright 2026 Ujjwal Aggarwal
+//
+// This file is part of CScout.
+//
+// CScout is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// CScout is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with CScout.  If not, see <http://www.gnu.org/licenses/>.
+
 
 import * as http from 'http';
 
