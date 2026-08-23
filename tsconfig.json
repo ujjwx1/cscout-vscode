@@ -1,11 +1,11 @@
 {
   // TODO: indentation is inconsistent across this project right now.
   // cscoutClient.ts, lifecycle.ts, platform.ts and buildSystem.ts use
-  // tabs, but extension.ts and test.ts use spaces. Leaving this alone for
-  // now since it's a solo project and it isn't causing any real problems,
-  // but if more people start working on this, pick one style, re-indent
-  // whichever files don't match, and maybe add an .editorconfig so it
-  // stays consistent going forward.
+  // tabs, but extension.ts and the test files use spaces. Fix this with
+  // Prettier: pick tabs or spaces for the whole project, add a
+  // .prettierrc, run it once to reformat everything, then add a
+  // format:check script and wire it into CI next to the existing lint
+  // step, same idea as npm run lint.
   "compilerOptions": {
     "module": "commonjs",
     "target": "ES2020",
