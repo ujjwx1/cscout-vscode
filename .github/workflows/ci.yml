@@ -1,4 +1,4 @@
-name: Build and Lint
+name: Build, Lint, and Test
 on:
   push:
     branches: [main]
@@ -14,3 +14,5 @@ jobs:
           node-version: 18
       - run: npm install
       - run: npx tsc -p ./
+      - run: npm run lint
+      - run: npm test
