@@ -9,6 +9,11 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
   "categories": [
     "Programming Languages",
     "Linters"
@@ -50,10 +55,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "cscout.renamePreview",
-        "title": "CScout: Preview Rename"
-      },
-      {
         "command": "cscout.showFunctionMetrics",
         "title": "CScout: Show Function Metrics"
       },
@@ -77,10 +78,6 @@
       {
         "command": "cscout.showCallGraph",
         "title": "CScout: Show Call Graph"
-      },
-      {
-        "command": "cscout.inspect",
-        "title": "CScout: Inspect Identifier"
       },
       {
         "command": "cscout.loadMore",
@@ -207,13 +204,16 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "lint": "eslint src",
     "test": "node out/test.js",
-    "test-e2e": "python3 ../cscout/src/csapi.py ../cscout/example/awk.db -p 8081 & PID=$!; sleep 2; npm run compile && node out/test.js; kill -9 $PID"
+    "test-e2e": "CSCOUT_PATH=\"${CSCOUT_PATH:-../cscout}\" && python3 \"$CSCOUT_PATH/src/csapi.py\" \"$CSCOUT_PATH/example/awk.db\" -p 8081 & PID=$!; sleep 2; npm run compile && node out/test-e2e.js; kill -9 $PID"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.0.0",
-    "typescript": "^5.0.0"
+    "eslint": "^10.9.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.67.0"
   }
 }
