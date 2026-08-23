@@ -1,0 +1,16 @@
+.vscode/**
+.vscode-test/**
+out/test/**
+src/**
+.gitignore
+tsconfig.json
+**/*.map
+**/*.md
+!README.md
+!walkthrough.md
+!FEATURES.md
+*.diff
+*.txt
+*.py
+git-issue/**
+.github/**
