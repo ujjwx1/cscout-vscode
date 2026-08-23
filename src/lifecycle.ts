@@ -45,6 +45,11 @@ export interface LifecycleEvents {
 export class CScoutLifecycle {
 	private state: CScoutState = 'stopped';
 	private cscoutProcess?: cp.ChildProcess;
+	// TODO: sqlite3 runs inside the same shell script as cscoutProcess (see
+	// the sqlite3=... arg passed into that spawn call), so I never actually
+	// spawn a separate process for it. This field stays undefined for the
+	// whole life of the extension. Delete this field, the assignment below,
+	// and its slot in the stopProcesses loop, none of it does anything.
 	private sqlite3Process?: cp.ChildProcess;
 	private csapiProcess?: cp.ChildProcess;
 	private dbPath?: string;
@@ -127,10 +132,10 @@ export class CScoutLifecycle {
 							const inWsl = commandRunsInWsl(this.settings.sqlite3Path);
 							const resolved = resolveCommand(this.settings.sqlite3Path, [
 								pathForCommand(this.dbPath, inWsl),
-								'"SELECT COUNT(*) FROM IDS;"'
+								'SELECT COUNT(*) FROM IDS;'
 							]);
 							
-							const { stdout } = await util.promisify(cp.exec)(`${resolved.command} ${resolved.args.join(' ')}`);
+							const { stdout } = await util.promisify(cp.execFile)(resolved.command, resolved.args);
 							identifierCount = parseInt(stdout.trim());
 							dbIsValid = !isNaN(identifierCount) && identifierCount > 0;
 						} catch (e) {
@@ -226,22 +231,25 @@ export class CScoutLifecycle {
 		const csFilePath = pathForCommand(this.csFilePath, cscoutInWsl);
 		const dbPath = pathForCommand(this.dbPath, cscoutInWsl);
 
-		const cmd = `${this.settings.cscoutBinaryPath} -s sqlite -q '${csFilePath}' | ${this.settings.sqlite3Path} '${dbPath}'`;
+		const script = '"$1" -s sqlite -q "$2" | "$3" "$4"';
+		const args = ['-c', script, 'sh', this.settings.cscoutBinaryPath, csFilePath, this.settings.sqlite3Path, dbPath];
 
 		return new Promise<void>((resolve, reject) => {
 			if (cscoutInWsl) {
 				// On Windows+WSL run the whole pipeline inside a single WSL sh invocation
 				// to avoid Windows pipe buffer truncation between two wsl.exe processes.
-				const wslExe = ['C:', 'Windows', 'System32', 'wsl.exe'].join(path.win32.sep);
-				this.channel.appendLine(`$ wsl.exe -e sh -c "${cmd}"`);
-				this.cscoutProcess = cp.spawn(wslExe, ['-e', 'sh', '-c', cmd], {
+				const wslExe = 'wsl.exe';
+				this.channel.appendLine(`$ wsl.exe -e sh -c '${script}' [args...]`);
+				this.channel.appendLine(`  args: cscout=${this.settings.cscoutBinaryPath}, cs=${csFilePath}, sqlite3=${this.settings.sqlite3Path}, db=${dbPath}`);
+				this.cscoutProcess = cp.spawn(wslExe, ['-e', 'sh', ...args], {
 					cwd: undefined,
 					shell: false,
 				});
 			} else {
 				// Native Linux, macOS, or Cygwin
-				this.channel.appendLine(`$ sh -c "${cmd}"`);
-				this.cscoutProcess = cp.spawn('sh', ['-c', cmd], {
+				this.channel.appendLine(`$ sh -c '${script}' [args...]`);
+				this.channel.appendLine(`  args: cscout=${this.settings.cscoutBinaryPath}, cs=${csFilePath}, sqlite3=${this.settings.sqlite3Path}, db=${dbPath}`);
+				this.cscoutProcess = cp.spawn('sh', args, {
 					cwd: undefined,
 					shell: false,
 				});
@@ -288,12 +296,18 @@ export class CScoutLifecycle {
 	}
 
 
+	// These six headers are POSIX-only.
+	// TODO: the real reason these specific six were picked was never written
+	// down when this was first added. Proper documentation of why these and
+	// not some other list is still pending.
 	private isPosixHeaderError(stderr: string): boolean {
 		return /Unable to open include file (pthread|sys\/|netinet|arpa\/|semaphore|libgen)/.test(
 			stderr
 		);
 	}
 
+	// Port 0 tells the OS to hand back any free port. Open, read the assigned
+	// port, close, never actually serve anything on it.
 	private async getAvailablePort(): Promise<number> {
 		return new Promise((resolve, reject) => {
 			const server = net.createServer();
@@ -323,7 +337,8 @@ export class CScoutLifecycle {
 			try {
 				this.channel.appendLine('Found stale PID file. Attempting pre-flight cleanup...');
 				const pidData = JSON.parse(fs.readFileSync(pidFilePath, 'utf-8'));
-				if (pidData.port && pidData.pid) {
+				const hasValidPidData = typeof pidData.pid === 'number' && typeof pidData.port === 'number';
+				if (hasValidPidData && pidData.port && pidData.pid) {
 					// 1. Try graceful HTTP quit
 					try {
 						const tempClient = new CScoutClient(this.settings.host, pidData.port);
@@ -338,7 +353,7 @@ export class CScoutLifecycle {
 					const inWsl = commandRunsInWsl(this.settings.pythonPath);
 					if (inWsl) {
 						this.channel.appendLine(`Killing WSL process ${pidData.pid}`);
-						try { cp.execSync(`wsl.exe kill -9 ${pidData.pid}`, { stdio: 'ignore' }); } catch (e) { /* ignored */ }
+						try { cp.execFileSync('wsl.exe', ['kill', '-9', String(pidData.pid)], { stdio: 'ignore' }); } catch (e) { /* ignored */ }
 					} else {
 						this.channel.appendLine(`Killing native process ${pidData.pid}`);
 						try { process.kill(pidData.pid, 'SIGKILL'); } catch (e) { /* ignored */ }
@@ -415,9 +430,15 @@ export class CScoutLifecycle {
 	}
 
 	/*
-	 * Watch the workspace for .c file additions/deletions.  Content
-	 * changes only mark the analysis stale; structural changes prompt
-	 * the user to re-analyze.
+	 * Watch the workspace for .c file additions/deletions only, not
+	 * edits. Adding or removing a whole file is a structural change,
+	 * CScout needs to know a file exists at all (or is gone), so this
+	 * prompts the user to re-analyze right away when that happens.
+	 *
+	 * There is a second, separate watcher in extension.ts
+	 * (handleFileChange) that reacts to actual edits too, across a wider
+	 * set of file types, and just marks the analysis stale in the status
+	 * bar instead of prompting immediately.
 	 */
 	private setupFileWatcher(workspaceRoot: string): void {
 		this.fileWatcher?.dispose();

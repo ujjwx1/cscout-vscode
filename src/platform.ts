@@ -20,8 +20,9 @@ import * as cp from 'child_process';
 import * as os from 'os';
 import * as util from 'util';
 
-const execAsync = util.promisify(cp.exec);
+const execFileAsync = util.promisify(cp.execFile);
 
+// TODO: check if dead code.
 export type Platform = 'linux' | 'darwin' | 'win32-wsl' | 'win32-native' | 'cygwin';
 
 export interface ResolvedCommand {
@@ -48,8 +49,11 @@ export function detectPlatform(): Platform {
 		if (process.env.CYGWIN || process.env.TERM === 'cygwin') {
 			return 'cygwin';
 		}
-		// If WSL is available, prefer routing through it since CScout is
-		// primarily a Unix tool.  We probe for wsl in main() at startup.
+		// This just returns the platform name here. Whether a command
+		// actually gets routed through WSL happens later, in
+		// resolveCommand(). WSL availability itself is checked lazily,
+		// the first time isWslAvailable() is actually called, not here
+		// and not at startup, then the result is cached after that.
 		return 'win32-native';
 	}
 	return 'linux';
@@ -57,16 +61,19 @@ export function detectPlatform(): Platform {
 
 let wslMountRoot = '/mnt/';
 
+// TODO: check if dead code.
 export function setWslMountRootForTesting(root: string) {
 	wslMountRoot = root;
 }
 
+// WSL normally mounts C: at /mnt/c, but a user can change that in their own
+// /etc/wsl.conf. Run wslpath and parse its output to detect that override.
 function detectWslMountRoot() {
 	if (process.platform !== 'win32') {
 		return;
 	}
 	try {
-		const out = cp.execSync('C:\\Windows\\System32\\wsl.exe wslpath "C:\\"', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
+		const out = cp.execSync('wsl.exe wslpath "C:\\"', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
 		const parsed = out.trim();
 		const match = /^(.*\/)c\/$/.exec(parsed.toLowerCase());
 		if (match) {
@@ -78,9 +85,11 @@ function detectWslMountRoot() {
 }
 
 /*
- * Best-effort check for WSL availability on Windows.  Called once at
- * activation; result is cached.  We keep this synchronous because it
- * only runs on Windows and only once per session.
+ * Best-effort check for WSL availability on Windows. Not called at
+ * activation, called lazily the first time something actually needs to
+ * know (resolveCommand or commandRunsInWsl). The result is cached after
+ * that first call, so either way it only really runs once per session.
+ * Kept synchronous since it only ever runs on Windows.
  */
 let wslAvailable: boolean | undefined;
 export function isWslAvailable(): boolean {
@@ -92,7 +101,7 @@ export function isWslAvailable(): boolean {
 		return false;
 	}
 	try {
-		cp.execSync('C:\\Windows\\System32\\wsl.exe --status', { stdio: 'ignore', timeout: 3000 });
+		cp.execSync('wsl.exe --status', { stdio: 'ignore', timeout: 3000 });
 		wslAvailable = true;
 		detectWslMountRoot();
 	} catch {
@@ -106,6 +115,7 @@ export function isWslAvailable(): boolean {
  * require routing through wsl.  We use this to decide per-command whether
  * to wrap: a user with all-native Windows tools does not want wsl added.
  */
+// TODO: check if dead code.
 function isLinuxPath(p: string): boolean {
 	// Absolute POSIX paths and /mnt/ style WSL mounts.
 	if (p.startsWith('/')) {
@@ -129,7 +139,7 @@ export function resolveCommand(command: string, args: string[]): ResolvedCommand
 
 	if (platform === 'win32-native' && isWslAvailable() && isLinuxPath(command)) {
 		return {
-			command: 'C:\\Windows\\System32\\wsl.exe',
+			command: 'wsl.exe',
 			args: ['-e', command, ...args],
 		};
 	}
@@ -221,7 +231,7 @@ export function toEditorPath(cscoutPath: string, platform: Platform = detectPlat
 	if (platform === 'linux' || platform === 'darwin') return cscoutPath;
 	if (platform === 'cygwin') return fromCygwinPath(cscoutPath);
 	if (platform === 'win32-native') {
-		if (cscoutPath.startsWith(wslMountRoot) || cscoutPath.startsWith('/mnt/')) {
+		if (cscoutPath.startsWith(wslMountRoot)) {
 			return fromWslPath(cscoutPath);
 		}
 		return cscoutPath.replace(/\//g, '\\');
@@ -290,13 +300,13 @@ export async function resolveScriptPath(scriptPath: string, cscoutBinPath: strin
 		// It's a bare command like 'cscout'. Find it dynamically.
 		try {
 			if (commandRunsInWsl) {
-				const { stdout } = await execAsync(`wsl.exe -e which ${cscoutBinPath}`);
+				const { stdout } = await execFileAsync('wsl.exe', ['-e', 'which', cscoutBinPath]);
 				absoluteCscoutBin = stdout.trim();
 			} else if (detectPlatform() === 'win32-native') {
-				const { stdout } = await execAsync(`where.exe ${cscoutBinPath}`);
+				const { stdout } = await execFileAsync('where.exe', [cscoutBinPath]);
 				absoluteCscoutBin = stdout.split('\r\n')[0].trim();
 			} else {
-				const { stdout } = await execAsync(`which ${cscoutBinPath}`);
+				const { stdout } = await execFileAsync('which', [cscoutBinPath]);
 				absoluteCscoutBin = stdout.trim();
 			}
 		} catch {
@@ -337,11 +347,11 @@ export async function checkDependency(command: string, friendlyMessage: string, 
 		}
 
 		if (commandRunsInWsl) {
-			await execAsync(`wsl.exe -e which ${command}`);
+			await execFileAsync('wsl.exe', ['-e', 'which', command]);
 		} else if (detectPlatform() === 'win32-native') {
-			await execAsync(`where.exe ${command}`);
+			await execFileAsync('where.exe', [command]);
 		} else {
-			await execAsync(`which ${command}`);
+			await execFileAsync('which', [command]);
 		}
 	} catch {
 		throw new Error(friendlyMessage);

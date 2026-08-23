@@ -135,6 +135,7 @@ function spawnStreaming(
 	args: string[],
 	cwd: string,
 	channel: vscode.OutputChannel,
+	// TODO: check if dead code.
 	onStdoutLine?: (line: string) => void
 ): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -186,8 +187,10 @@ function spawnStreaming(
 }
 
 /*
- * Present a choice to the user when a build system is detected.  We never
- * run configuration commands silently - the user must confirm.
+ * Present a choice to the user when a build system is detected. Whenever
+ * this function runs, it always shows the prompt and waits for the user.
+ * It's generateCsFile that decides whether to call this at all, see the
+ * TODO on its previousBuildResult param for the one way that gets skipped.
  */
 async function askUserAboutBuildSystem(
 	detected: DetectedBuildSystems
@@ -296,6 +299,9 @@ async function askUserAboutBuildSystem(
 	return { choice: picked.value };
 }
 
+// If there's more than one existing .cs file, show a dropdown to pick one.
+// With exactly one, or none, it doesn't just use that file automatically,
+// it opens the OS file-browse dialog instead.
 async function pickCsFile(candidates?: string[]): Promise<string | undefined> {
 	if (candidates && candidates.length > 1) {
 		const picked = await vscode.window.showQuickPick(
@@ -325,6 +331,12 @@ export async function generateCsFile(
 	settings: CScoutSettings,
 	channel: vscode.OutputChannel,
 	progress?: vscode.Progress<{ message?: string; increment?: number }>,
+	// TODO (immediate): this is dead today, the only caller always passes
+	// undefined. But if it's ever wired up to pass a real value, this skips
+	// askUserAboutBuildSystem entirely and runs cmake/meson/configure/csmake
+	// silently, no confirmation prompt at all. Don't wire this up without
+	// keeping that safety check, or CScout will start running build commands
+	// on the user's machine without asking first.
 	previousBuildResult?: BuildResult
 ): Promise<BuildResult> {
 	const detected = detectAll(workspaceRoot);

@@ -22,6 +22,12 @@ import * as http from 'http';
  * Field naming: csapi returns SQL column names verbatim (EID, NAME,
  * FUN, UNUSED, etc.).  We do not translate - what you see in the API
  * matches what the extension code accesses.
+ *
+ * TODO: none of the fields on the interfaces below are documented. A lot of
+ * them are CScout's own internal analysis flags (CPPCONST, DEFCCONSTVAL,
+ * NOTDEFCCONSTVAL, EXPCCONSTVAL, NOTEXPCCONSTVAL, SUETAG, SUMEMBER, YACC,
+ * and others) and need a real explanation of what each one represents, not
+ * just its column name. Needs to be documented properly.
  */
 
 export interface CScoutIdentifier {
@@ -94,6 +100,7 @@ export interface CScoutLocation {
 	FILE: string;
 	FOFFSET: number;
 	LNUM: number | null;
+	// TODO: check if dead code.
 	LINE_START_OFFSET?: number;
 	RO: number;
 }
@@ -152,6 +159,7 @@ export interface CScoutIdentifierDetail {
 	} | null;
 }
 
+// TODO: check if dead code.
 export type CScoutIdDetail = CScoutIdentifierDetail;
 
 export interface CScoutRefactorApplyResult {
@@ -222,6 +230,39 @@ export class CScoutClient {
 		});
 	}
 
+	// Same as get<T> above, but skips JSON.parse. Used for endpoints that return
+	// SVG or HTML directly (call graph, include graph, rename preview), where
+	// JSON.parse would just fail on the response body.
+	public getRaw(path: string): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const req = http.get(
+				{
+					host: this.host,
+					port: this.port,
+					path,
+					timeout: 30_000,
+				},
+				(res) => {
+					let body = '';
+					res.setEncoding('utf-8');
+					res.on('data', (chunk) => (body += chunk));
+					res.on('end', () => {
+						if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+							reject(new Error(`csapi ${path}: HTTP ${res.statusCode}`));
+							return;
+						}
+						resolve(body);
+					});
+				}
+			);
+			req.on('timeout', () => {
+				req.destroy();
+				reject(new Error(`csapi ${path}: timeout`));
+			});
+			req.on('error', reject);
+		});
+	}
+
 	private buildQuery(params: Record<string, unknown>): string {
 		const parts: string[] = [];
 		for (const [key, value] of Object.entries(params)) {
@@ -237,6 +278,7 @@ export class CScoutClient {
 		return this.get<CScoutStatus>('/status');
 	}
 
+	// TODO: check if dead code.
 	async isAlive(): Promise<boolean> {
 		try {
 			const status = await this.getStatus();
@@ -272,6 +314,7 @@ export class CScoutClient {
 		return this.get<CScoutFile[]>(`/files${q}`);
 	}
 
+	// TODO: check if dead code.
 	async getFilemetrics(fid: number): Promise<CScoutFileMetric[]> {
 		return this.get<CScoutFileMetric[]>(`/filemetrics?fid=${fid}`);
 	}
@@ -290,15 +333,15 @@ export class CScoutClient {
 
 	/**
 	 * Fetch a single function by exact name (defined functions only).
-	 * Used by hover to get CCYCL1 without fetching all 10,000+ functions.
+	 * Used by hover to get CCYCL1 for one function without fetching the whole function list.
 	 */
 	async getFunctionByName(name: string): Promise<CScoutFunction | null> {
 		return this.get<CScoutFunction | null>(`/functions/byname?name=${encodeURIComponent(name)}`);
 	}
 
 	/**
-	 * Fetch per-category file counts with a single SQL query.
-	 * Replaces 8 parallel API calls when the Files panel opens.
+	 * Fetch per-category file counts.
+	 * Used by the sidebar to show folder counts without loading all rows.
 	 */
 	async getFileCounts(): Promise<Record<string, number>> {
 		return this.get<Record<string, number>>('/files/counts');
@@ -308,14 +351,17 @@ export class CScoutClient {
 		return this.get<CScoutFuncMetric[]>(`/funmetrics?fnid=${fnid}`);
 	}
 
+	// TODO: check if dead code.
 	async getCallers(eid: number): Promise<CScoutCallEntry[]> {
 		return this.get<CScoutCallEntry[]>(`/callers?fnid=${eid}`);
 	}
 
+	// TODO: check if dead code.
 	async getCallees(eid: number): Promise<CScoutCallEntry[]> {
 		return this.get<CScoutCallEntry[]>(`/callees?fnid=${eid}`);
 	}
 
+	// TODO: check if dead code.
 	async getProjects(): Promise<CScoutProject[]> {
 		return this.get<CScoutProject[]>('/projects');
 	}
@@ -362,10 +408,12 @@ export class CScoutClient {
 		return this.get<CScoutAttribute[]>('/attributes/files');
 	}
 
+	// TODO: check if dead code.
 	async getProjectFiles(pid: number): Promise<CScoutFile[]> {
 		return this.get<CScoutFile[]>(`/project/files?pid=${pid}`);
 	}
 
+	// TODO: check if dead code.
 	async applyRename(eid: number, newName: string): Promise<CScoutRefactorApplyResult> {
 		return this.get<CScoutRefactorApplyResult>(
 			`/rename/apply?eid=${eid}&newname=${encodeURIComponent(newName)}`
