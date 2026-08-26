@@ -1797,8 +1797,7 @@ export function activate(context: vscode.ExtensionContext): void {
             const client = lifecycle.getClient();
             if (!client) return;
             const metrics = await client.getFunmetricsAggregate();
-            const fns = await client.getFunctions({ limit: 10000 });
-            showFunMetricsAggregatePanel(metrics, fns);
+            showFunMetricsAggregatePanel(metrics);
         }),
         vscode.commands.registerCommand('cscout.inspectFile', async (nodeOrFid?: any) => {
             const client = lifecycle.getClient();
@@ -2883,76 +2882,63 @@ function showFunMetricsAggregatePanel(metrics: any[]): void {
         'cscoutFunMetricsAggregate',
         'Function Metrics Table',
         vscode.ViewColumn.One,
-        { enableScripts: true }
+        { enableScripts: false }
     );
-    const fnMap = new Map(fns.map(f => [f.ID, f]));
-    const cols = Object.keys(getMetricDescriptions());
-    const headerCells = cols
-        .map((k, i) => `<th data-col="${i + 1}" onclick="sortBy(${i + 1})" style="cursor:pointer;text-align:right" title="${escapeHtml(getMetricDescriptions()[k])}">${escapeHtml(k)}</th>`)
-        .join('');
-    const postRows = metrics.filter((m: any) => m.PRECPP === 0);
-    const rows = postRows.map((m: any) => {
-        const fn = fnMap.get(m.FUNCTIONID);
-        const fnName = fn ? fn.NAME : String(m.FUNCTIONID);
-        const fnFile = fn ? (fn.FILE ?? '') : '';
-        const fnLnum = fn?.LNUM ?? 0;
-        const cells = cols.map(k => {
-            const v = m[k];
-            const display = v !== null && v !== undefined ? escapeHtml(String(v)) : '-';
-            const sortVal = v !== null && v !== undefined ? String(v) : '';
-            return `<td style="text-align:right" data-val="${sortVal}">${display}</td>`;
-        }).join('');
-        return `<tr data-file="${escapeHtml(fnFile)}" data-lnum="${fnLnum}"><td data-val="${escapeHtml(fnName)}">${escapeHtml(fnName)}</td>${cells}</tr>`;
+
+    const aggregate = (rows: any[], key: string): { total: number; min: number; max: number } | null => {
+        let total = 0, min = Infinity, max = -Infinity, any = false;
+        for (const r of rows) {
+            const v = r[key];
+            if (v === null || v === undefined) continue;
+            const n = Number(v);
+            total += n;
+            if (n < min) min = n;
+            if (n > max) max = n;
+            any = true;
+        }
+        return any ? { total, min, max } : null;
+    };
+
+    const naCells = '<td style="text-align:right">-</td>'.repeat(4);
+    const numCells = (agg: { total: number; min: number; max: number } | null, count: number): string => {
+        if (!agg) return naCells;
+        const avg = count > 0 ? (agg.total / count).toFixed(2) : '-';
+        return `<td style="text-align:right">${agg.total}</td><td style="text-align:right">${agg.min}</td>`
+            + `<td style="text-align:right">${agg.max}</td><td style="text-align:right">${avg}</td>`;
+    };
+
+
+    const preRows = metrics.filter(m => m.PRECPP === 1);
+    const postRows = metrics.filter(m => m.PRECPP === 0);
+    const count = new Set(metrics.map(m => m.FUNCTIONID)).size;
+
+    const bodyRows = FUN_METRIC_TABLE.map(spec => {
+        const preAgg = spec.pre ? aggregate(preRows, spec.key) : null;
+        const postAgg = spec.post ? aggregate(postRows, spec.key) : null;
+        return `<tr><td>${escapeHtml(spec.label)}</td>${numCells(preAgg, count)}${numCells(postAgg, count)}</tr>`;
     }).join('');
 
-    const sumCells = cols.map(k => {
-        let sum = 0;
-        let count = 0;
-        for (const m of postRows) {
-            if (m[k] !== null && m[k] !== undefined) {
-                sum += Number(m[k]);
-                count++;
-            }
-        }
-        const avg = count > 0 ? (sum / count).toFixed(2) : '-';
-        return `<td style="text-align:right">Sum: ${sum}<br>Avg: ${avg}</td>`;
-    }).join('');
-    const footer = `<tfoot><tr style="font-weight:bold;background:var(--vscode-editor-inactiveSelectionBackground)"><td>Total</td>${sumCells}</tr></tfoot>`;
-    const listener = panel.webview.onDidReceiveMessage(async msg => {
-        if (msg.command === 'open' && msg.file) {
-            const uri = vscode.Uri.file(toEditorPath(msg.file));
-            const doc = await vscode.workspace.openTextDocument(uri);
-            const line = Math.max(0, (msg.lnum || 1) - 1);
-            await vscode.window.showTextDocument(doc, {
-                selection: new vscode.Range(line, 0, line, 0)
-            });
-        }
-    });
-    panel.onDidDispose(() => listener.dispose());
     const nonce = getNonce();
     panel.webview.html = `<!doctype html><html><head>
 ${getWebviewCsp(panel.webview, nonce)}
 <style>
         body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);color:var(--vscode-foreground);background:var(--vscode-editor-background);padding:1em}
         table{border-collapse:collapse;width:100%}
-        th,td{padding:4px 8px;border:1px solid var(--vscode-panel-border);white-space:nowrap}
-        th{background:var(--vscode-editor-background);position:sticky;top:0;cursor:pointer;border-bottom:2px solid var(--vscode-panel-border)}
-        th:hover{background:var(--vscode-list-hoverBackground)}
-        tr:hover td{background:var(--vscode-list-hoverBackground);cursor:pointer}
-        td:first-child{text-align:left;max-width:200px;overflow:hidden;text-overflow:ellipsis}
+        th,td{padding:4px 8px;border:1px solid var(--vscode-panel-border);white-space:nowrap;text-align:right}
+        th{background:var(--vscode-editor-background);position:sticky;top:0;border-bottom:2px solid var(--vscode-panel-border)}
+        td:first-child,th:first-child{text-align:left}
     </style></head><body>
-    <h2>Function Metrics</h2>
-    <p>Click a column header to sort. Click a row to navigate to the function definition.</p>
+    <h1>Function Metrics</h1>
+    <p>Number of elements: ${count}</p>
     <div style="overflow:auto;max-height:80vh">
-    <table id="t"><thead><tr><th data-col="0" onclick="sortBy(0)" style="cursor:pointer;text-align:left">Function</th>${headerCells}</tr></thead>
-    <tbody id="tb">${rows}</tbody>${footer}</table></div>
-    <script nonce="${nonce}">
-    ${SORTABLE_TABLE_SCRIPT}
-    document.getElementById('tb').addEventListener('click',e=>{
-        const row=e.target.closest('tr');
-        if(row&&row.dataset.file) vscode.postMessage({command:'open', file:row.dataset.file, lnum:parseInt(row.dataset.lnum||'0')});
-    });
-    </script>
+    <table>
+        <thead>
+            <tr><th></th><th colspan="4" style="text-align:center">Pre-cpp</th><th colspan="4" style="text-align:center">Post-cpp</th></tr>
+            <tr><th style="text-align:left">Metric</th><th>Total</th><th>Min</th><th>Max</th><th>Avg</th><th>Total</th><th>Min</th><th>Max</th><th>Avg</th></tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+    </table>
+    </div>
     </body></html>`;
 }
 
