@@ -1042,7 +1042,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
             md.appendMarkdown(`### $(symbol-${exact.FUN ? 'function' : exact.MACRO ? 'constant' : 'variable'}) ${exact.NAME}\n\n`);
             md.appendMarkdown(`**Kind:** ${describeIdKind(exact)}  \n`);
 
-            const scope = exact.LSCOPE ? 'Global (visible across the entire project)' : exact.CSCOPE ? 'Static (visible only in this file)' : 'Local (inside a function/block)';
+            const scope = exact.LSCOPE ? 'Project scope' : exact.CSCOPE ? 'File scope' : 'Local';
             md.appendMarkdown(`**Scope:** ${scope}  \n`);
 
             // For functions: fetch complexity for this one function only, not the whole function list.
