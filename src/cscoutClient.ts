@@ -125,6 +125,15 @@ export interface CScoutFuncMetric {
 	[key: string]: number | null;
 }
 
+export interface CScoutIdentifierClassStat {
+	class: string;
+	pre_cpp_total: number;
+	distinct: number;
+	avg_len: number | null;
+	min_len: number | null;
+	max_len: number | null;
+}
+
 export interface CScoutRefactorPreview {
 	eid: number;
 	old_name: string;

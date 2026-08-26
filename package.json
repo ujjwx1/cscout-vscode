@@ -76,10 +76,6 @@
         "icon": "$(search)"
       },
       {
-        "command": "cscout.showIncludeGraph",
-        "title": "CScout: Show Include Graph"
-      },
-      {
         "command": "cscout.showCallGraph",
         "title": "CScout: Show Call Graph"
       },

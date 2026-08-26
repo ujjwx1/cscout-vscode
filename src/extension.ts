@@ -497,7 +497,6 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
                 { kind: 'group', label: 'Writable files containing strings', count: c['with_strings'], groupKey: 'with-strings' },
                 { kind: 'group', label: 'Writable .h files with #include directives', count: c['h_with_includes'], groupKey: 'h-with-includes' },
                 { kind: 'action', label: 'View File Metrics Table', command: 'cscout.showFileMetricsAggregate', icon: 'table' },
-                { kind: 'action', label: 'View Include Graph', command: 'cscout.showIncludeGraph', icon: 'type-hierarchy' },
             ];
         }
 
@@ -553,7 +552,7 @@ export class FunctionTreeProvider implements vscode.TreeDataProvider<Node> {
         this._emitter.fire();
     }
 
-    /** Called by cscout.loadMore command - fetches next 200 from server and appends. */
+    /** Called by cscout.loadMore command, fetches next 200 from server and appends. */
     async loadMore(node: any): Promise<void> {
         if (!node?.groupKey) return;
         const client = this.getClient();
@@ -1017,7 +1016,7 @@ export class CScoutHoverProvider implements vscode.HoverProvider {
      * - Uses CancellationToken to bail out if the user has moved away.
      * - Uses getFunctionByName() to fetch just this one function's complexity,
      *   instead of the whole function list.
-     * - Does NOT store any global state - each hover is self-contained.
+     * - Does NOT store any global state, each hover is self-contained.
      */
     async provideHover(
         document: vscode.TextDocument,
@@ -1290,7 +1289,7 @@ function locationToVSCode(loc: CScoutLocation): vscode.Location {
 }
 
 // -----------------------------------------------------------------------
-// Diagnostics - unused identifiers surfaced in Problems panel
+// Diagnostics: unused identifiers surfaced in Problems panel
 // -----------------------------------------------------------------------
 
 // Turns a (file, line) location from the server into an exact range to
@@ -1359,8 +1358,8 @@ async function refreshDiagnostics(
         const byFile = new Map<string, vscode.Diagnostic[]>();
         const docCache = new Map<string, vscode.TextDocument>();
 
-        // Limit how many we resolve locations for - resolving each hits the
-        // server.  Prioritize ordinary identifiers and functions.
+        // Limit how many we resolve locations for, since resolving each hits
+        // the server. Prioritize ordinary identifiers and functions.
         const worthUnused = unused.filter((id) => !id.READONLY && (id.ORDINARY || id.FUN || id.MACRO)).slice(0, 500);
         const worthStatic = shouldStatic.filter((id) => !id.TYPEDEF && !id.ENUM && !id.SUETAG).slice(0, 500);
 
@@ -1768,11 +1767,6 @@ export function activate(context: vscode.ExtensionContext): void {
             if (target === undefined) return;
             await showCallGraph(context, client, target, isFnid, nameHint);
         }),
-        vscode.commands.registerCommand('cscout.showIncludeGraph', async (writableOnly: boolean = true) => {
-            const client = lifecycle.getClient();
-            if (!client) return;
-            await showIncludeGraph(context, client, writableOnly);
-        }),
         vscode.commands.registerCommand('cscout.showFunctionMetrics', async (fnid?: number) => {
             const client = lifecycle.getClient();
             if (!client) return;
@@ -2039,7 +2033,7 @@ function makeGraphInteractive(html: string, webview: vscode.Webview, showAll?: b
     const nonce = getNonce();
     const hasToggle = showAll !== undefined;
     const toggleHtml = hasToggle ? `
-        <div style="position: fixed; top: 10px; left: 10px; z-index: 1000; background: var(--vscode-editor-background); padding: 5px 10px; border: 1px solid var(--vscode-widget-border); border-radius: 3px;">
+        <div id="graphControls" style="position: fixed; top: 10px; left: 10px; z-index: 1000; background: var(--vscode-editor-background); padding: 5px 10px; border: 1px solid var(--vscode-widget-border); border-radius: 3px;">
             <label style="cursor: pointer; display: flex; align-items: center; gap: 5px;">
                 <input type="checkbox" id="showAll" ${showAll ? 'checked' : ''}> Show file-scoped functions
             </label>
@@ -2172,7 +2166,7 @@ async function showCallGraph(
         fnid = eidOrFnid;
         fnName = nameHint ?? `function ${fnid}`;
     } else {
-        // Called from hover with EID - look up function by name.
+        // Called from hover with EID, look up function by name.
         const detail = await client.getIdentifier(eidOrFnid);
         fnName = detail.identifier.NAME;
         const fn = await client.getFunctionByName(fnName);
@@ -2226,34 +2220,6 @@ async function showCallGraph(
     });
 
     renderGraph();
-}
-
-async function showIncludeGraph(
-    context: vscode.ExtensionContext,
-    client: CScoutClient,
-    writableOnly: boolean = true
-): Promise<void> {
-    try {
-        const pythonPath = vscode.workspace.getConfiguration('cscout').get<string>('pythonPath', 'python3');
-        await checkDependency('dot', 'dot not found', commandRunsInWsl(pythonPath));
-    } catch {
-        vscode.window.showWarningMessage('Graphviz (dot) was not found in your system PATH. Include graph generation may fail or display empty. Please install Graphviz.');
-    }
-
-    const panel = vscode.window.createWebviewPanel(
-        'cscoutIncludeGraph',
-        writableOnly ? 'Include graph (writable files)' : 'Include graph (all files)',
-        vscode.ViewColumn.One,
-        { enableScripts: true }
-    );
-    try {
-        const html = await client.getRaw(`/filegraph/include${writableOnly ? '?writable=1' : ''}`);
-        panel.webview.html = makeGraphInteractive(html, panel.webview);
-    } catch (err) {
-        panel.webview.html = `<!doctype html><html><head>${getWebviewCsp(panel.webview)}</head><body style="font-family:sans-serif;padding:2em">
-            <p>Error generating include graph: ${escapeHtml(String(err))}</p>
-            </body></html>`;
-    }
 }
 
 async function showFunctionMetrics(
@@ -2726,7 +2692,7 @@ function showFileMetricsAggregatePanel(
             const preAgg = spec.pre ? aggregate(preRows, spec.key) : null;
             const postAgg = spec.post ? aggregate(postRows, spec.key) : null;
             return `<tr><td>${escapeHtml(spec.label)}</td>${numCells(preAgg, fileCount)}${numCells(postAgg, fileCount)}</tr>`;
-    }).join('');
+        }).join('');
 
         return `
     <h2>${escapeHtml(title)} (${fileCount})</h2>
