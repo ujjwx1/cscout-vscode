@@ -382,7 +382,7 @@ export class FileTreeProvider implements vscode.TreeDataProvider<Node> {
         this._emitter.fire();
     }
 
-    /** Called by cscout.loadMore command - fetches next 200 from server and appends. */
+    /** Called by cscout.loadMore command, fetches next 200 from server and appends. */
     async loadMore(node: any): Promise<void> {
         if (!node?.groupKey) return;
         const client = this.getClient();
@@ -879,30 +879,21 @@ async function resolveExactIdentifierAtCursor(
         }
     }
 
-    // TODO: quick explanation for why this fallback exists at all.
-    // CScout looks up an identifier by file plus exact line number, from
-    // whenever analysis last ran. Say you edit this file and add a few
-    // lines above where "len" used to be. In your editor "len" is now
-    // sitting on a different line than before. CScout's database has no
-    // idea that happened, since it hasn't re-analyzed yet, so it still
-    // thinks the old line number is right. When we ask "what's at this
-    // line," nothing matches and we get a 404, even though "len" itself
-    // never changed. Only its line number moved.
+    // TODO: this fallback exists because CScout resolves by file and exact
+    // line number from whenever analysis last ran. If the file is edited
+    // afterward and the identifier's line shifts, the old line number no
+    // longer matches anything and the lookup 404s even though the
+    // identifier itself is unchanged. Once the line can't be trusted, name
+    // is the only thing left to search by, so this falls back to asking if
+    // anything with this exact name exists anywhere in the project.
     //
-    // Once the line number can't be trusted, there's nothing left to
-    // search by except the name. That's what this fallback is: forget
-    // where it is, just ask if anything named exactly this exists
-    // anywhere in the project.
-    //
-    // TODO: the limit: 1000 below is not a real fix, just a safety cap
-    // so one lookup can't drag back the whole project. The server's name
-    // filter isn't an exact match either, so for a short common name used
-    // as a local variable in lots of functions (like "len"), this can
-    // come back with close to 1000 rows, most of which get thrown away
-    // right after in the .filter() below. The real fix is teaching
-    // csapi.py to do the exact match itself, or to only search inside
-    // the current file, so we're not fetching a pile of data just to
-    // delete most of it. Not done yet.
+    // TODO: the limit: 1000 below is just a safety cap, not a real fix.
+    // The server's name filter isn't an exact match, so a short common
+    // name (like "len") can come back with close to 1000 rows that mostly
+    // get discarded by the .filter() below. The real fix is teaching
+    // csapi.py to do the exact match itself, or to only search inside the
+    // current file, instead of fetching a pile of data just to throw most
+    // of it away.
     const results = await client.getIdentifiers({ name, limit: 1000 });
     const matching = results.filter((r) => r.NAME === name);
 
@@ -1240,7 +1231,7 @@ class CScoutRenameProvider implements vscode.RenameProvider {
                 // VS Code on Windows normalizes to \n-only, so positionAt()
                 // expects an offset that doesn't count \r chars.
                 // For a token on LNUM (1-based), there are (LNUM-1) \r bytes
-                // that CScout counted but VS Code doesn't → subtract them.
+                // that CScout counted but VS Code doesn't, so subtract them.
                 try {
                     const openDoc = document.uri.fsPath.toLowerCase() === uri.fsPath.toLowerCase()
                         ? document
@@ -1421,12 +1412,12 @@ async function refreshDiagnostics(
             diagnostics.set(vscode.Uri.file(file), list);
         }
     } catch {
-        /* server may be down - leave problems empty */
+        /* server may be down, leave problems empty */
     }
 }
 
 // -----------------------------------------------------------------------
-// CodeLens provider - shows caller/callee/complexity counts above functions
+// CodeLens provider: shows caller/callee/complexity counts above functions
 // -----------------------------------------------------------------------
 
 export class CScoutCodeLensProvider implements vscode.CodeLensProvider {
@@ -2611,6 +2602,75 @@ ${getWebviewCsp(panel.webview)}
     </body></html>`;
 }
 
+// One row per file metric, in the same order and with the same pre/post
+// preprocessing flags CScout itself uses (cscout/src/metrics.cpp and
+// cscout/src/filemetrics.cpp).
+interface FileMetricSpec { key: string; label: string; pre: boolean; post: boolean; }
+
+const FILE_METRIC_TABLE: FileMetricSpec[] = [
+    { key: 'NCHAR', label: 'Number of characters', pre: true, post: false },
+    { key: 'NCCOMMENT', label: 'Number of comment characters', pre: true, post: false },
+    { key: 'NSPACE', label: 'Number of space characters', pre: true, post: false },
+    { key: 'NLCOMMENT', label: 'Number of line comments', pre: true, post: false },
+    { key: 'NBCOMMENT', label: 'Number of block comments', pre: true, post: false },
+    { key: 'NLINE', label: 'Number of lines', pre: true, post: false },
+    { key: 'MAXLINELEN', label: 'Maximum number of characters in a line', pre: true, post: false },
+    { key: 'MAXSTMTLEN', label: 'Maximum number of tokens in a statement', pre: true, post: true },
+    { key: 'MAXSTMTNEST', label: 'Maximum level of statement nesting', pre: false, post: true },
+    { key: 'MAXBRACENEST', label: 'Maximum level of brace nesting', pre: true, post: true },
+    { key: 'MAXBRACKNEST', label: 'Maximum level of bracket nesting', pre: true, post: true },
+    { key: 'BRACENEST', label: 'Dangling brace nesting', pre: true, post: false },
+    { key: 'BRACKNEST', label: 'Dangling bracket nesting', pre: true, post: false },
+    { key: 'NULINE', label: 'Number of unprocessed lines', pre: true, post: false },
+    { key: 'NPPDIRECTIVE', label: 'Number of C preprocessor directives', pre: true, post: false },
+    { key: 'NPPCOND', label: 'Number of processed C preprocessor conditionals (ifdef, if, elif)', pre: true, post: false },
+    { key: 'NPPFMACRO', label: 'Number of defined C preprocessor function-like macros', pre: true, post: false },
+    { key: 'NPPOMACRO', label: 'Number of defined C preprocessor object-like macros', pre: true, post: false },
+    { key: 'NTOKEN', label: 'Number of tokens', pre: true, post: true },
+    { key: 'NSTMT', label: 'Number of statements or declarations', pre: true, post: true },
+    { key: 'NOP', label: 'Number of operators', pre: true, post: true },
+    { key: 'NUOP', label: 'Number of unique operators', pre: true, post: true },
+    { key: 'NNCONST', label: 'Number of numeric constants', pre: true, post: true },
+    { key: 'NCLIT', label: 'Number of character literals', pre: true, post: true },
+    { key: 'NSTRING', label: 'Number of character strings', pre: true, post: true },
+    { key: 'NPPCONCATOP', label: 'Number of token concatenation operators (##)', pre: true, post: false },
+    { key: 'NPPSTRINGOP', label: 'Number of token stringification operators (#)', pre: true, post: false },
+    { key: 'NIF', label: 'Number of if statements', pre: true, post: true },
+    { key: 'NELSE', label: 'Number of else clauses', pre: true, post: true },
+    { key: 'NSWITCH', label: 'Number of switch statements', pre: true, post: true },
+    { key: 'NCASE', label: 'Number of case labels', pre: true, post: true },
+    { key: 'NDEFAULT', label: 'Number of default labels', pre: true, post: true },
+    { key: 'NBREAK', label: 'Number of break statements', pre: true, post: true },
+    { key: 'NFOR', label: 'Number of for statements', pre: true, post: true },
+    { key: 'NWHILE', label: 'Number of while statements', pre: true, post: true },
+    { key: 'NDO', label: 'Number of do statements', pre: true, post: true },
+    { key: 'NCONTINUE', label: 'Number of continue statements', pre: true, post: true },
+    { key: 'NGOTO', label: 'Number of goto statements', pre: true, post: true },
+    { key: 'NRETURN', label: 'Number of return statements', pre: true, post: true },
+    { key: 'NASM', label: 'Number of assembly statements', pre: true, post: true },
+    { key: 'NTYPEOF', label: 'Number of typeof operators', pre: true, post: true },
+    { key: 'NPID', label: 'Number of project-scope identifiers', pre: true, post: true },
+    { key: 'NFID', label: 'Number of file-scope (static) identifiers', pre: true, post: true },
+    { key: 'NMID', label: 'Number of macro identifiers', pre: true, post: false },
+    { key: 'NID', label: 'Total number of object and object-like identifiers', pre: true, post: true },
+    { key: 'NUPID', label: 'Number of unique project-scope identifiers', pre: true, post: true },
+    { key: 'NUFID', label: 'Number of unique file-scope (static) identifiers', pre: true, post: true },
+    { key: 'NUMID', label: 'Number of unique macro identifiers', pre: true, post: false },
+    { key: 'NUID', label: 'Number of unique object and object-like identifiers', pre: true, post: true },
+    { key: 'NLABEL', label: 'Number of goto labels', pre: true, post: true },
+    { key: 'NMACROEXPANDTOKEN', label: 'Tokens added by macro expansion', pre: true, post: false },
+    { key: 'NCOPIES', label: 'Number of copies of the file', pre: true, post: false },
+    { key: 'NINCFILE', label: 'Number of directly included files', pre: true, post: false },
+    { key: 'NPFUNCTION', label: 'Number of defined project-scope functions', pre: false, post: true },
+    { key: 'NFFUNCTION', label: 'Number of defined file-scope (static) functions', pre: false, post: true },
+    { key: 'NPVAR', label: 'Number of defined project-scope variables', pre: false, post: true },
+    { key: 'NFVAR', label: 'Number of defined file-scope (static) variables', pre: false, post: true },
+    { key: 'NAGGREGATE', label: 'Number of complete aggregate (struct/union) declarations', pre: false, post: true },
+    { key: 'NAMEMBER', label: 'Number of declared aggregate (struct/union) members', pre: false, post: true },
+    { key: 'NENUM', label: 'Number of complete enumeration declarations', pre: false, post: true },
+    { key: 'NEMEMBER', label: 'Number of declared enumeration elements', pre: false, post: true },
+];
+
 function showFileMetricsAggregatePanel(
     metrics: any[],
     files: any[]
@@ -2621,67 +2681,72 @@ function showFileMetricsAggregatePanel(
         vscode.ViewColumn.One,
         { enableScripts: true }
     );
-    const fidToName = new Map(files.map(f => [f.FID, f.NAME]));
-    const fileRows = metrics.filter((m: any) => m.PRECPP === 0);
-    const cols = Object.keys(getMetricDescriptions());
-    const headerCells = cols
-        .map((k, i) => `<th data-col="${i + 1}" onclick="sortBy(${i + 1})" style="cursor:pointer;text-align:right" title="${escapeHtml(getMetricDescriptions()[k])}">${escapeHtml(k)}</th>`)
-        .join('');
-    const rows = fileRows.map(m => {
-        const fileName = fidToName.get(m.FID) ?? String(m.FID);
-        const cells = cols.map(k => {
-            const v = m[k];
-            const display = v !== null && v !== undefined ? escapeHtml(String(v)) : '-';
-            const sortVal = v !== null && v !== undefined ? String(v) : '';
-            return `<td style="text-align:right" data-val="${sortVal}">${display}</td>`;
-        }).join('');
-        return `<tr data-file="${escapeHtml(fileName)}"><td data-val="${escapeHtml(fileName)}">${escapeHtml(fileName)}</td>${cells}</tr>`;
+
+    // Total, min, and max across a set of metric rows for one field.
+    // Returns null if none of the rows had a value for that field.
+    const aggregate = (rows: any[], key: string): { total: number; min: number; max: number } | null => {
+        let total = 0, min = Infinity, max = -Infinity, any = false;
+        for (const r of rows) {
+            const v = r[key];
+            if (v === null || v === undefined) continue;
+            const n = Number(v);
+            total += n;
+            if (n < min) min = n;
+            if (n > max) max = n;
+            any = true;
+        }
+        return any ? { total, min, max } : null;
+    };
+
+    const naCells = '<td style="text-align:right">-</td>'.repeat(4);
+    const numCells = (agg: { total: number; min: number; max: number } | null, fileCount: number): string => {
+        if (!agg) return naCells;
+        const avg = fileCount > 0 ? (agg.total / fileCount).toFixed(2) : '-';
+        return `<td style="text-align:right">${agg.total}</td><td style="text-align:right">${agg.min}</td>`
+            + `<td style="text-align:right">${agg.max}</td><td style="text-align:right">${avg}</td>`;
+    };
+
+    // Writable files first, then read-only, matching CScout's own file
+    // metrics page (FileMetricsSummary::operator<<).
+    const renderGroup = (title: string, roValue: number): string => {
+        const groupFids = new Set(files.filter(f => f.RO === roValue).map(f => f.FID));
+        const fileCount = groupFids.size;
+        const groupMetrics = metrics.filter(m => groupFids.has(m.FID));
+        const preRows = groupMetrics.filter(m => m.PRECPP === 1);
+        const postRows = groupMetrics.filter(m => m.PRECPP === 0);
+
+        const bodyRows = FILE_METRIC_TABLE.map(spec => {
+            const preAgg = spec.pre ? aggregate(preRows, spec.key) : null;
+            const postAgg = spec.post ? aggregate(postRows, spec.key) : null;
+            return `<tr><td>${escapeHtml(spec.label)}</td>${numCells(preAgg, fileCount)}${numCells(postAgg, fileCount)}</tr>`;
     }).join('');
 
-    const sumCells = cols.map(k => {
-        let sum = 0;
-        let count = 0;
-        for (const m of fileRows) {
-            if (m[k] !== null && m[k] !== undefined) {
-                sum += Number(m[k]);
-                count++;
-            }
-        }
-        const avg = count > 0 ? (sum / count).toFixed(2) : '-';
-        return `<td style="text-align:right">Sum: ${sum}<br>Avg: ${avg}</td>`;
-    }).join('');
-    const footer = `<tfoot><tr style="font-weight:bold;background:var(--vscode-editor-inactiveSelectionBackground)"><td>Total</td>${sumCells}</tr></tfoot>`;
-    const listener = panel.webview.onDidReceiveMessage(async msg => {
-        if (msg.command === 'open' && msg.file) {
-            const uri = vscode.Uri.file(toEditorPath(msg.file));
-            await vscode.window.showTextDocument(uri);
-        }
-    });
-    panel.onDidDispose(() => listener.dispose());
+        return `
+    <h2>${escapeHtml(title)} (${fileCount})</h2>
+    <div style="overflow:auto;max-height:70vh;margin-bottom:2em">
+    <table>
+        <thead>
+            <tr><th></th><th colspan="4" style="text-align:center">Pre-cpp</th><th colspan="4" style="text-align:center">Post-cpp</th></tr>
+            <tr><th style="text-align:left">Metric</th><th>Total</th><th>Min</th><th>Max</th><th>Avg</th><th>Total</th><th>Min</th><th>Max</th><th>Avg</th></tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+    </table>
+    </div>`;
+    };
+
     const nonce = getNonce();
     panel.webview.html = `<!doctype html><html><head>
 ${getWebviewCsp(panel.webview, nonce)}
 <style>
         body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);color:var(--vscode-foreground);background:var(--vscode-editor-background);padding:1em}
         table{border-collapse:collapse;width:100%}
-        th,td{padding:4px 8px;border:1px solid var(--vscode-panel-border);white-space:nowrap}
-        th{background:var(--vscode-editor-background);position:sticky;top:0;cursor:pointer;border-bottom:2px solid var(--vscode-panel-border)}
-        th:hover{background:var(--vscode-list-hoverBackground)}
-        tr:hover td{background:var(--vscode-list-hoverBackground);cursor:pointer}
-        td:first-child{text-align:left;max-width:300px;overflow:hidden;text-overflow:ellipsis}
+        th,td{padding:4px 8px;border:1px solid var(--vscode-panel-border);white-space:nowrap;text-align:right}
+        th{background:var(--vscode-editor-background);position:sticky;top:0;border-bottom:2px solid var(--vscode-panel-border)}
+        td:first-child,th:first-child{text-align:left}
     </style></head><body>
-    <h2>File Metrics</h2>
-    <p>Click a column header to sort. Click a row to open the file.</p>
-    <div style="overflow:auto;max-height:80vh">
-    <table id="t"><thead><tr><th data-col="0" onclick="sortBy(0)" style="cursor:pointer;text-align:left">File</th>${headerCells}</tr></thead>
-    <tbody id="tb">${rows}</tbody>${footer}</table></div>
-    <script nonce="${nonce}">
-    ${SORTABLE_TABLE_SCRIPT}
-    document.getElementById('tb').addEventListener('click',e=>{
-        const row=e.target.closest('tr');
-        if(row) vscode.postMessage({command:'open', file:row.dataset.file});
-    });
-    </script>
+    <h1>File Metrics</h1>
+    ${renderGroup('Writable Files', 0)}
+    ${renderGroup('Read-only Files', 1)}
     </body></html>`;
 }
 
