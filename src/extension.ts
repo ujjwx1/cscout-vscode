@@ -2099,8 +2099,15 @@ function makeGraphInteractive(html: string, webview: vscode.Webview, showAll?: b
             ` : ''}
             let scale = 1, x = 0, y = 0, isDragging = false, startX, startY;
             const svg = document.querySelector('svg');
+            // The pan/zoom handlers below sit on window, so they also see clicks
+            // that land on the controls overlay. Without this guard the
+            // pointerdown handler calls setPointerCapture on the SVG, which
+            // steals the rest of the click away from the checkbox, so the
+            // checkbox never toggles and never fires its change event.
+            const inControls = (e) => !!(e.target && e.target.closest && e.target.closest('#graphControls'));
             if (svg) {
                 window.addEventListener('wheel', (e) => {
+                    if (inControls(e)) return;
                     e.preventDefault();
                     const zoom = e.deltaY < 0 ? 1.15 : 0.85;
                     const rect = svg.getBoundingClientRect();
@@ -2114,6 +2121,7 @@ function makeGraphInteractive(html: string, webview: vscode.Webview, showAll?: b
 
                 window.addEventListener('pointerdown', (e) => {
                     if (e.button !== 0) return;
+                    if (inControls(e)) return;
                     isDragging = true;
                     startX = e.clientX - x;
                     startY = e.clientY - y;
