@@ -26,6 +26,7 @@ import {
     CScoutFile,
     CScoutFunction,
     CScoutIdentifier,
+    CScoutIdentifierClassStat,
     CScoutLocation,
     IdentifierFilters,
     FunctionFilters,
@@ -34,14 +35,10 @@ import { CScoutLifecycle, CScoutState } from './lifecycle';
 import { CScoutSettings } from './buildSystem';
 import { toEditorPath, toCScoutPath, checkDependency, commandRunsInWsl } from './platform';
 
-// TODO: this file has grown pretty big (2800+ lines) and it does a lot of
-// different jobs in one place: all the sidebar tree views, the hover,
-// definition, rename and codelens providers, the diagnostics refresh
-// logic, and every webview panel's HTML. Not splitting it up right now,
-// but if it keeps growing, it would be worth pulling pieces out into
+// TODO: this file has grown big, it would be worth pulling pieces out into
 // their own files, something like treeProviders.ts, editorProviders.ts,
 // a webviews folder, and diagnostics.ts, so activate() at the bottom just
-// wires everything together instead of holding it all itself.
+// wires everything together.
 
 let cscoutVersion: string | undefined;
 
@@ -151,7 +148,7 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
         this._emitter.fire();
     }
 
-    /** Called by cscout.loadMore command - fetches next 200 from server and appends. */
+    /** Called by cscout.loadMore command, fetches next 200 from server and appends. */
     async loadMore(node: any): Promise<void> {
         if (!node?.groupKey) return;
         const client = this.getClient();
@@ -261,6 +258,7 @@ export class IdentifierTreeProvider implements vscode.TreeDataProvider<Node> {
                 { kind: 'group', label: 'Unused writable macros', count: c['unused_macros'], groupKey: 'unused-macros' },
                 { kind: 'group', label: 'Writable variable identifiers that should be static', count: c['static_vars'], groupKey: 'static-vars' },
                 { kind: 'group', label: 'Writable function identifiers that should be static', count: c['static_funs'], groupKey: 'static-funs' },
+                { kind: 'action', label: 'View Identifier Statistics', command: 'cscout.showIdentifierStats', icon: 'table' },
             ];
         }
 
@@ -1798,6 +1796,12 @@ export function activate(context: vscode.ExtensionContext): void {
             const files = await client.getFiles();
             showFileMetricsAggregatePanel(metrics, files);
         }),
+        vscode.commands.registerCommand('cscout.showIdentifierStats', async () => {
+            const client = lifecycle.getClient();
+            if (!client) return;
+            const stats = await client.getIdentifierStats();
+            showIdentifierStatsPanel(stats);
+        }),
         vscode.commands.registerCommand('cscout.showFunMetricsAggregate', async () => {
             const client = lifecycle.getClient();
             if (!client) return;
@@ -2681,10 +2685,135 @@ ${getWebviewCsp(panel.webview, nonce)}
     </body></html>`;
 }
 
-function showFunMetricsAggregatePanel(
-    metrics: any[],
-    fns: any[]
+function showIdentifierStatsPanel(
+    stats: { writable: CScoutIdentifierClassStat[]; readonly: CScoutIdentifierClassStat[] }
 ): void {
+    const panel = vscode.window.createWebviewPanel(
+        'cscoutIdentifierStats',
+        'Identifier Statistics',
+        vscode.ViewColumn.One,
+        { enableScripts: false }
+    );
+
+    const fmt = (v: number | null): string => v === null ? '-' : String(Math.round(v * 1000) / 1000);
+
+    const renderGroup = (title: string, rows: CScoutIdentifierClassStat[]): string => {
+        const bodyRows = rows.map(r => `
+            <tr>
+                <td>${escapeHtml(r.class)}</td>
+                <td style="text-align:right">${r.pre_cpp_total}</td>
+                <td style="text-align:right">-</td>
+                <td style="text-align:right">${r.distinct}</td>
+                <td style="text-align:right">${fmt(r.avg_len)}</td>
+                <td style="text-align:right">${fmt(r.min_len)}</td>
+                <td style="text-align:right">${fmt(r.max_len)}</td>
+            </tr>`).join('');
+        return `
+    <h2>${escapeHtml(title)}</h2>
+    <div style="overflow:auto">
+    <table>
+        <thead>
+            <tr>
+                <th style="text-align:left">Identifier class</th>
+                <th>Pre-cpp<br>total ids</th>
+                <th>Post-cpp<br>total ids</th>
+                <th>Distinct ids</th>
+                <th>Avg len</th>
+                <th>Min len</th>
+                <th>Max len</th>
+            </tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+    </table>
+    </div>`;
+    };
+
+    const nonce = getNonce();
+    panel.webview.html = `<!doctype html><html><head>
+${getWebviewCsp(panel.webview, nonce)}
+<style>
+        body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);color:var(--vscode-foreground);background:var(--vscode-editor-background);padding:1em}
+        table{border-collapse:collapse;width:100%;margin-bottom:2em}
+        th,td{padding:4px 8px;border:1px solid var(--vscode-panel-border);white-space:nowrap;text-align:right}
+        th{background:var(--vscode-editor-background);border-bottom:2px solid var(--vscode-panel-border)}
+        td:first-child,th:first-child{text-align:left}
+    </style></head><body>
+    <h1>Identifier Statistics</h1>
+    ${renderGroup('Writable Identifiers', stats.writable)}
+    ${renderGroup('Read-only Identifiers', stats.readonly)}
+    </body></html>`;
+}
+
+// general-purpose metrics as FILE_METRIC_TABLE (they come from
+// the same shared base class in CScout, cscout/src/metrics.cpp), plus
+// the metrics that only apply to functions (cscout/src/funmetrics.cpp)
+const FUN_METRIC_TABLE: FileMetricSpec[] = [
+    { key: 'NCHAR', label: 'Number of characters', pre: true, post: false },
+    { key: 'NCCOMMENT', label: 'Number of comment characters', pre: true, post: false },
+    { key: 'NSPACE', label: 'Number of space characters', pre: true, post: false },
+    { key: 'NLCOMMENT', label: 'Number of line comments', pre: true, post: false },
+    { key: 'NBCOMMENT', label: 'Number of block comments', pre: true, post: false },
+    { key: 'NLINE', label: 'Number of lines', pre: true, post: false },
+    { key: 'MAXLINELEN', label: 'Maximum number of characters in a line', pre: true, post: false },
+    { key: 'MAXSTMTLEN', label: 'Maximum number of tokens in a statement', pre: true, post: true },
+    { key: 'MAXSTMTNEST', label: 'Maximum level of statement nesting', pre: false, post: true },
+    { key: 'MAXBRACENEST', label: 'Maximum level of brace nesting', pre: true, post: true },
+    { key: 'MAXBRACKNEST', label: 'Maximum level of bracket nesting', pre: true, post: true },
+    { key: 'BRACENEST', label: 'Dangling brace nesting', pre: true, post: false },
+    { key: 'BRACKNEST', label: 'Dangling bracket nesting', pre: true, post: false },
+    { key: 'NULINE', label: 'Number of unprocessed lines', pre: true, post: false },
+    { key: 'NPPDIRECTIVE', label: 'Number of C preprocessor directives', pre: true, post: false },
+    { key: 'NPPCOND', label: 'Number of processed C preprocessor conditionals (ifdef, if, elif)', pre: true, post: false },
+    { key: 'NPPFMACRO', label: 'Number of defined C preprocessor function-like macros', pre: true, post: false },
+    { key: 'NPPOMACRO', label: 'Number of defined C preprocessor object-like macros', pre: true, post: false },
+    { key: 'NTOKEN', label: 'Number of tokens', pre: true, post: true },
+    { key: 'NSTMT', label: 'Number of statements or declarations', pre: true, post: true },
+    { key: 'NOP', label: 'Number of operators', pre: true, post: true },
+    { key: 'NUOP', label: 'Number of unique operators', pre: true, post: true },
+    { key: 'NNCONST', label: 'Number of numeric constants', pre: true, post: true },
+    { key: 'NCLIT', label: 'Number of character literals', pre: true, post: true },
+    { key: 'NSTRING', label: 'Number of character strings', pre: true, post: true },
+    { key: 'NPPCONCATOP', label: 'Number of token concatenation operators (##)', pre: true, post: false },
+    { key: 'NPPSTRINGOP', label: 'Number of token stringification operators (#)', pre: true, post: false },
+    { key: 'NIF', label: 'Number of if statements', pre: true, post: true },
+    { key: 'NELSE', label: 'Number of else clauses', pre: true, post: true },
+    { key: 'NSWITCH', label: 'Number of switch statements', pre: true, post: true },
+    { key: 'NCASE', label: 'Number of case labels', pre: true, post: true },
+    { key: 'NDEFAULT', label: 'Number of default labels', pre: true, post: true },
+    { key: 'NBREAK', label: 'Number of break statements', pre: true, post: true },
+    { key: 'NFOR', label: 'Number of for statements', pre: true, post: true },
+    { key: 'NWHILE', label: 'Number of while statements', pre: true, post: true },
+    { key: 'NDO', label: 'Number of do statements', pre: true, post: true },
+    { key: 'NCONTINUE', label: 'Number of continue statements', pre: true, post: true },
+    { key: 'NGOTO', label: 'Number of goto statements', pre: true, post: true },
+    { key: 'NRETURN', label: 'Number of return statements', pre: true, post: true },
+    { key: 'NASM', label: 'Number of assembly statements', pre: true, post: true },
+    { key: 'NTYPEOF', label: 'Number of typeof operators', pre: true, post: true },
+    { key: 'NPID', label: 'Number of project-scope identifiers', pre: true, post: true },
+    { key: 'NFID', label: 'Number of file-scope (static) identifiers', pre: true, post: true },
+    { key: 'NMID', label: 'Number of macro identifiers', pre: true, post: false },
+    { key: 'NID', label: 'Total number of object and object-like identifiers', pre: true, post: true },
+    { key: 'NUPID', label: 'Number of unique project-scope identifiers', pre: true, post: true },
+    { key: 'NUFID', label: 'Number of unique file-scope (static) identifiers', pre: true, post: true },
+    { key: 'NUMID', label: 'Number of unique macro identifiers', pre: true, post: false },
+    { key: 'NUID', label: 'Number of unique object and object-like identifiers', pre: true, post: true },
+    { key: 'NLABEL', label: 'Number of goto labels', pre: true, post: true },
+    { key: 'NMACROEXPANDTOKEN', label: 'Tokens added by macro expansion', pre: true, post: false },
+    { key: 'NGNSOC', label: "Number of global namespace occupants at function's top", pre: false, post: true },
+    { key: 'NMPARAM', label: 'Number of parameters (for macros)', pre: true, post: false },
+    { key: 'NFPARAM', label: 'Number of parameters (for functions)', pre: false, post: true },
+    { key: 'NEPARAM', label: 'Number of passed non-expression macro parameters', pre: true, post: false },
+    { key: 'FANIN', label: 'Fan-in (number of calling functions)', pre: false, post: true },
+    { key: 'FANOUT', label: 'Fan-out (number of called functions)', pre: false, post: true },
+    { key: 'CCYCL1', label: 'Cyclomatic complexity (control statements)', pre: true, post: true },
+    { key: 'CCYCL2', label: 'Extended cyclomatic complexity (includes branching operators)', pre: true, post: true },
+    { key: 'CCYCL3', label: 'Maximum cyclomatic complexity (includes branching operators and all switch branches)', pre: true, post: true },
+    { key: 'CSTRUC', label: 'Structure complexity (Henry and Kafura)', pre: true, post: true },
+    { key: 'CHAL', label: 'Halstead volume', pre: true, post: true },
+    { key: 'IFLOW', label: 'Information flow metric (Henry and Selig)', pre: true, post: true },
+];
+
+function showFunMetricsAggregatePanel(metrics: any[]): void {
     const panel = vscode.window.createWebviewPanel(
         'cscoutFunMetricsAggregate',
         'Function Metrics Table',

@@ -304,6 +304,10 @@ export class CScoutClient {
 		return this.get<Record<string, number>>('/identifiers/counts');
 	}
 
+	async getIdentifierStats(): Promise<{ writable: CScoutIdentifierClassStat[]; readonly: CScoutIdentifierClassStat[] }> {
+		return this.get<{ writable: CScoutIdentifierClassStat[]; readonly: CScoutIdentifierClassStat[] }>('/identifiers/stats');
+	}
+
 	async getIdentifier(eid: number, limit?: number): Promise<CScoutIdentifierDetail> {
 		const q = limit ? `&limit=${limit}` : '';
 		return this.get<CScoutIdentifierDetail>(`/identifier?eid=${eid}${q}`);

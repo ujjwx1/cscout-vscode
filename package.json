@@ -67,6 +67,10 @@
         "title": "CScout: Show Function Metrics Table"
       },
       {
+        "command": "cscout.showIdentifierStats",
+        "title": "CScout: Show Identifier Statistics"
+      },
+      {
         "command": "cscout.inspectFile",
         "title": "CScout: Inspect File Details",
         "icon": "$(search)"
