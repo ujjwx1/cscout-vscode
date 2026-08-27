@@ -2994,7 +2994,7 @@ cscout.csmakePath     - path to csmake (for Makefile projects)</code></pre>
 <h2>Supported Build Systems</h2>
 <p>Open any C project folder in VS Code. The extension supports:</p>
 <table>
-<tr><th>Build System</th><th>How it works</th></tr>
+<tr><th>Build System</th><th>What the extension runs automatically</th></tr>
 <tr><td>Existing <code>.cs</code> file</td><td>Used directly - fastest option</td></tr>
 <tr><td>CMake</td><td>Runs <code>cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON</code> then cscoco</td></tr>
 <tr><td>Meson</td><td>Runs <code>meson setup build</code> then cscoco</td></tr>

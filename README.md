@@ -13,14 +13,32 @@ This extension puts that analysis inside VS Code itself. Instead of switching wi
 - Sidebar views for identifiers, functions, and files, grouped the same way CScout groups them
 - Call graphs and include graphs, when Graphviz is installed
 
-## Setting it up
+## Installation & Setup
 
-You need CScout itself installed, along with Python 3 and sqlite3. Graphviz is optional, only needed for the call and include graphs.
+You can install this extension directly into VS Code without building it from source.
 
-Open a C project, CMake, Meson, a Makefile, Autotools, or an existing CScout workspace all work, open the CScout view in the Activity Bar, and hit Start Analysis. The extension figures out your build system, generates the `.cs` workspace file CScout needs, runs the analysis, and starts a small local server the editor talks to for the rest of the session.
+### 1. Prerequisites
+You must have the following installed and available in your system `PATH`:
+- **CScout** (ensure you are using the `csapi` branch containing the REST API backend)
+- **Python 3**
+- **sqlite3**
+- **Graphviz (dot)** (optional, but required for rendering dependency and call graphs)
 
-If `cscout` isn't on your PATH, set the path directly under Settings, CScout.
+### 2. Install the Extension
+1. Download the latest `.vsix` release file from the [GitHub Releases](https://github.com/dspinellis/cscout-vscode/releases) page.
+2. Open VS Code and navigate to the **Extensions** view (`Ctrl+Shift+X`).
+3. Click the `...` menu at the top right of the Extensions view.
+4. Select **Install from VSIX...** and choose the downloaded `.vsix` file.
 
+## Getting Started
+
+1. Open a C project folder in VS Code (CMake, Meson, Makefiles, Autotools, or an existing `.cs` CScout workspace).
+2. Open the **CScout** view in the VS Code Activity Bar on the left.
+3. In the CScout Control Panel, click **Tutorial**. This interactive walkthrough will guide you through:
+   - Setting up your paths (CScout binary, Python 3, etc.)
+   - Automatically verifying your environment with the **Verify Setup** tool
+   - Triggering your first analysis
+4. Once analysis completes, you can hover over identifiers, view metrics, and explore dependency graphs directly inside VS Code!
 
 ## About
 
