@@ -6,6 +6,10 @@
   "description": "VS Code interface for the CScout C source code analyzer",
   "version": "0.2.0",
   "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cscout-project/cscout-vscode.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -135,18 +139,54 @@
     },
     "menus": {
       "commandPalette": [
-        { "command": "cscout.refresh", "when": "false" },
-        { "command": "cscout.showFunctionMetrics", "when": "false" },
-        { "command": "cscout.showFileMetricsAggregate", "when": "false" },
-        { "command": "cscout.showFunMetricsAggregate", "when": "false" },
-        { "command": "cscout.showIdentifierStats", "when": "false" },
-        { "command": "cscout.inspectFile", "when": "false" },
-        { "command": "cscout.showCallGraph", "when": "false" },
-        { "command": "cscout.loadMore", "when": "false" },
-        { "command": "cscout.findReferences", "when": "false" },
-        { "command": "cscout.rename", "when": "false" },
-        { "command": "cscout.showFileDep", "when": "false" },
-        { "command": "cscout.inspect", "when": "false" }
+        {
+          "command": "cscout.refresh",
+          "when": "false"
+        },
+        {
+          "command": "cscout.showFunctionMetrics",
+          "when": "false"
+        },
+        {
+          "command": "cscout.showFileMetricsAggregate",
+          "when": "false"
+        },
+        {
+          "command": "cscout.showFunMetricsAggregate",
+          "when": "false"
+        },
+        {
+          "command": "cscout.showIdentifierStats",
+          "when": "false"
+        },
+        {
+          "command": "cscout.inspectFile",
+          "when": "false"
+        },
+        {
+          "command": "cscout.showCallGraph",
+          "when": "false"
+        },
+        {
+          "command": "cscout.loadMore",
+          "when": "false"
+        },
+        {
+          "command": "cscout.findReferences",
+          "when": "false"
+        },
+        {
+          "command": "cscout.rename",
+          "when": "false"
+        },
+        {
+          "command": "cscout.showFileDep",
+          "when": "false"
+        },
+        {
+          "command": "cscout.inspect",
+          "when": "false"
+        }
       ],
       "view/item/context": [
         {

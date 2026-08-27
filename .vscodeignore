@@ -8,9 +8,10 @@ tsconfig.json
 **/*.md
 !README.md
 !walkthrough.md
-!FEATURES.md
 *.diff
 *.txt
+!LICENSE.txt
 *.py
 git-issue/**
 .github/**
+.notes/**

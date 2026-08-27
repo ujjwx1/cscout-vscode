@@ -25,7 +25,7 @@ You must have the following installed and available in your system `PATH`:
 - **Graphviz (dot)** (optional, but required for rendering dependency and call graphs)
 
 ### 2. Install the Extension
-1. Download the latest `.vsix` release file from the [GitHub Releases](https://github.com/dspinellis/cscout-vscode/releases) page.
+1. Download the latest `.vsix` release file from the [GitHub Releases](https://github.com/cscout-project/cscout-vscode/releases) page.
 2. Open VS Code and navigate to the **Extensions** view (`Ctrl+Shift+X`).
 3. Click the `...` menu at the top right of the Extensions view.
 4. Select **Install from VSIX...** and choose the downloaded `.vsix` file.
